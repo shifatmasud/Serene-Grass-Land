@@ -1,5 +1,3 @@
-
-
 import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { GUI } from 'lil-gui';
@@ -16,9 +14,11 @@ import { createPineTreeGeometry } from './pinetree';
 
 // --- Configuration ---
 const initialParams = {
+    // World
+    timeOfDay: 10.0, // 0-24 hours, 10 AM
+
     // Default Preset Values
     groundColor: '#2fa753',
-    waterColor: '#d4f1f9',
     monolithColor: '#586F7C',
     grassBaseColor: '#a7c957',
     grassTipColor: '#55aa6f',
@@ -43,8 +43,8 @@ const initialParams = {
     azimuth: 180,
     
     // Flora
-    grassCount: 50000, // Reduced for smaller area and performance
-    treeCount: 5, // Reduced for performance as requested
+    grassCount: 50000,
+    treeCount: 5,
 
     // Post-processing
     bloomStrength: 0.4,
@@ -58,6 +58,7 @@ const initialParams = {
     rippleSpeed: 0.03,
     interactiveRippleRadius: 5.0,
     interactiveRippleStrength: 0.15,
+    waterDistortion: 1.5,
 
     // Clouds
     cloudColor: '#ffffff',
@@ -66,14 +67,166 @@ const initialParams = {
     // Fog
     fogColor: '#c5d1d9',
     fogDensity: 0.015,
+    
+    // Stars
+    starCount: 5000,
+    starBaseSize: 1.5,
+    starColor: '#ffffff',
 };
 
-const maxGrassCount = 50000; // Reduced
+const maxGrassCount = 50000;
 const maxCloudCount = 50;
-const maxTreeCount = 5; // Reduced
+const maxTreeCount = 5;
+const maxStarCount = 20000;
 
 
 // --- Scene Element Creators ---
+function createMoon() {
+    const moonSize = 20;
+    const textureSize = 128;
+    const canvas = document.createElement('canvas');
+    canvas.width = textureSize;
+    canvas.height = textureSize;
+    const context = canvas.getContext('2d');
+    if (!context) {
+        throw new Error('Could not get 2D context from canvas');
+    }
+
+    const centerX = textureSize / 2;
+    const centerY = textureSize / 2;
+    const radius = textureSize * 0.4;
+
+    // Soft glow
+    const grad = context.createRadialGradient(centerX, centerY, radius * 0.5, centerX, centerY, radius);
+    grad.addColorStop(0, 'rgba(255, 255, 240, 1.0)');
+    grad.addColorStop(0.8, 'rgba(255, 255, 240, 0.5)');
+    grad.addColorStop(1, 'rgba(255, 255, 240, 0)');
+
+    context.fillStyle = grad;
+    context.fillRect(0, 0, textureSize, textureSize);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+    });
+    const geometry = new THREE.PlaneGeometry(moonSize, moonSize);
+    const moon = new THREE.Mesh(geometry, material);
+    return moon;
+}
+
+function createStarTexture(): THREE.CanvasTexture {
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d');
+    if (!context) {
+        throw new Error('Could not get 2D context');
+    }
+
+    const centerX = size / 2;
+    const centerY = size / 2;
+    const radius = size / 2;
+
+    const gradient = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+    gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.8)');
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, size, size);
+
+    return new THREE.CanvasTexture(canvas);
+}
+
+function updateStarGeometry(geometry: THREE.BufferGeometry, params: { count: number; baseSize: number; color: string | number | THREE.Color }) {
+    const vertices = [];
+    const colors = [];
+    const sizes = [];
+
+    const radius = 300;
+    const baseColor = new THREE.Color(params.color);
+
+    for (let i = 0; i < params.count; i++) {
+        const x = (Math.random() - 0.5) * 2 * radius;
+        const y = Math.random() * radius * 0.8 + 50;
+        const z = (Math.random() - 0.5) * 2 * radius;
+        const magSq = x * x + y * y + z * z;
+        if (magSq > radius * radius || magSq < (radius * 0.8) * (radius * 0.8)) {
+            i--;
+            continue;
+        }
+        vertices.push(x, y, z);
+
+        const brightness = 0.5 + Math.random() * 0.5;
+        colors.push(baseColor.r * brightness, baseColor.g * brightness, baseColor.b * brightness);
+
+        sizes.push(params.baseSize + Math.random() * 1.5);
+    }
+
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setAttribute('particleSize', new THREE.Float32BufferAttribute(sizes, 1));
+    geometry.attributes.position.needsUpdate = true;
+    geometry.attributes.color.needsUpdate = true;
+    geometry.attributes.particleSize.needsUpdate = true;
+}
+
+function createStars(params: { count: number; baseSize: number; color: string | number | THREE.Color }) {
+    const starGeometry = new THREE.BufferGeometry();
+    updateStarGeometry(starGeometry, params);
+    
+    const starTexture = createStarTexture();
+
+    const starMaterial = new THREE.PointsMaterial({
+        map: starTexture,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        sizeAttenuation: false,
+    });
+    
+    starMaterial.onBeforeCompile = (shader) => {
+        shader.uniforms.time = { value: 0 };
+        shader.vertexShader = `
+            attribute float particleSize;
+            varying float vRand;
+        \n` + shader.vertexShader.replace(
+            '#include <project_vertex>',
+            `
+            vRand = (position.x + position.z) * 10.0;
+            #include <project_vertex>
+            gl_PointSize = particleSize * ( 200.0 / -mvPosition.z );
+            `
+        );
+        shader.fragmentShader = `
+            uniform float time;
+            varying float vRand;
+        \n` + shader.fragmentShader.replace(
+            'vec4 diffuseColor = vec4( diffuse, opacity );',
+            `
+            float twinkleFactor = 0.5 * (1.0 + sin(time * 2.0 + vRand));
+            twinkleFactor = pow(twinkleFactor, 2.0);
+            vec4 diffuseColor = vec4( diffuse, opacity * (0.5 + 0.5 * twinkleFactor) );
+            `
+        );
+        starMaterial.userData.shader = shader;
+    };
+
+
+    const stars = new THREE.Points(starGeometry, starMaterial);
+    stars.userData.update = (newParams: { count: number; baseSize: number; color: string | number | THREE.Color }) => {
+        updateStarGeometry(starGeometry, newParams);
+    };
+
+    return stars;
+}
 
 function createSky() {
     const sky = new Sky();
@@ -101,7 +254,7 @@ function createHemisphereLight() {
 function createDirectionalLight() {
     const light = new THREE.DirectionalLight(initialParams.sunColor, initialParams.lightIntensity);
     light.castShadow = true;
-    light.shadow.mapSize.set(1024, 1024); // Reduced shadow map resolution
+    light.shadow.mapSize.set(1024, 1024);
     light.shadow.camera.top = 30;
     light.shadow.camera.bottom = -30;
     light.shadow.camera.left = -30;
@@ -114,7 +267,7 @@ function createDirectionalLight() {
 }
 
 function createGround() {
-    const geometry = new THREE.PlaneGeometry(100, 100); // Reduced ground area
+    const geometry = new THREE.PlaneGeometry(100, 100);
     const material = new THREE.MeshToonMaterial({ color: initialParams.groundColor });
     const ground = new THREE.Mesh(geometry, material);
     ground.rotation.x = -Math.PI / 2;
@@ -214,7 +367,7 @@ function createGrass(pondPosition: THREE.Vector3, pondRadius: number) {
 
     const dummy = new THREE.Object3D();
     const color = new THREE.Color();
-    const areaSize = 50; // Reduced spawn area
+    const areaSize = 50;
     const pondCenter = new THREE.Vector2(pondPosition.x, pondPosition.z);
     const pondRadiusSq = pondRadius * pondRadius;
 
@@ -244,7 +397,7 @@ function createGrass(pondPosition: THREE.Vector3, pondRadius: number) {
 }
 
 function createNeedleTexture(): THREE.CanvasTexture {
-    const size = 32; // Reduced texture resolution
+    const size = 32;
     const canvas = document.createElement('canvas');
     canvas.width = 4;
     canvas.height = size;
@@ -253,11 +406,9 @@ function createNeedleTexture(): THREE.CanvasTexture {
         throw new Error('Could not get 2D context from canvas');
     }
 
-    // A base color close to the foliage
     context.fillStyle = '#4a6b5a';
     context.fillRect(0, 0, 4, size);
 
-    // Add subtle lighter and darker vertical streaks for texture
     context.fillStyle = 'rgba(255, 255, 255, 0.15)';
     context.fillRect(1, 0, 1, size);
     
@@ -272,12 +423,45 @@ function createNeedleTexture(): THREE.CanvasTexture {
 }
 
 function createPineTrees(treeGeometry: THREE.BufferGeometry, needleTexture: THREE.Texture, pondPosition: THREE.Vector3, pondRadius: number) {
-    // FIX: Property 'specular' does not exist on type 'MeshToonMaterial'. This property was removed in recent versions of three.js.
-    // The line setting it has been removed to fix the error. MeshToonMaterial does not have traditional specular highlights.
     const treeMaterial = new THREE.MeshToonMaterial({
         vertexColors: true,
         map: needleTexture,
     });
+
+    treeMaterial.onBeforeCompile = (shader) => {
+        shader.uniforms.time = { value: 0 };
+        shader.uniforms.uMousePos = { value: new THREE.Vector3(9999, 9999, 9999) };
+
+        shader.vertexShader = `
+            uniform float time;
+            uniform vec3 uMousePos;
+        \n` + shader.vertexShader;
+
+        shader.vertexShader = shader.vertexShader.replace(
+            '#include <begin_vertex>',
+            `
+                #include <begin_vertex>
+                
+                vec4 instanceWorldPosition = instanceMatrix * vec4(position, 1.0);
+                float dist = distance(instanceWorldPosition.xz, uMousePos.xz);
+                float pushRadius = 6.0;
+                float pushStrength = 0.4;
+
+                if (dist < pushRadius) {
+                    float falloff = 1.0 - dist / pushRadius;
+                    falloff = pow(falloff, 2.0);
+                    
+                    vec3 pushDir = normalize(instanceWorldPosition.xyz - uMousePos);
+                    pushDir.y = 0.0;
+                    
+                    float heightFactor = position.y / 7.5;
+                    
+                    transformed.xyz += pushDir * falloff * pushStrength * heightFactor;
+                }
+            `
+        );
+        treeMaterial.userData.shader = shader;
+    };
 
     const treeMesh = new THREE.InstancedMesh(treeGeometry, treeMaterial, maxTreeCount);
     treeMesh.count = initialParams.treeCount;
@@ -285,7 +469,7 @@ function createPineTrees(treeGeometry: THREE.BufferGeometry, needleTexture: THRE
     treeMesh.receiveShadow = true;
 
     const dummy = new THREE.Object3D();
-    const areaSize = 50; // Reduced spawn area
+    const areaSize = 50;
     const pondCenter = new THREE.Vector2(pondPosition.x, pondPosition.z);
     const pondRadiusSq = (pondRadius + 2) * (pondRadius + 2);
 
@@ -294,7 +478,7 @@ function createPineTrees(treeGeometry: THREE.BufferGeometry, needleTexture: THRE
         do {
             x = (Math.random() - 0.5) * areaSize;
             z = (Math.random() - 0.5) * areaSize;
-        } while (new THREE.Vector2(x, z).distanceToSquared(pondCenter) < pondRadiusSq || Math.abs(x) < 20 && Math.abs(z) < 20); // Avoid central area
+        } while (new THREE.Vector2(x, z).distanceToSquared(pondCenter) < pondRadiusSq || Math.abs(x) < 20 && Math.abs(z) < 20);
 
         dummy.position.set(x, 0, z);
         dummy.rotation.y = Math.random() * Math.PI * 2;
@@ -317,37 +501,28 @@ type SceneElements = {
     water: Water;
     clouds: THREE.Group;
     pineTrees: THREE.InstancedMesh;
+    stars: THREE.Points;
+    moon: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
     bloomPass: UnrealBloomPass;
+    axesHelper: THREE.AxesHelper;
 };
 
-function setupGUI(params: typeof initialParams, sceneElements: SceneElements, scene: THREE.Scene) {
-    const { sky, directionalLight, hemisphereLight, ground, grassMesh, water, clouds, pineTrees, bloomPass } = sceneElements;
+function setupGUI(params: typeof initialParams, sceneElements: SceneElements, scene: THREE.Scene, updateWorldState: (time: number) => void) {
+    const { ground, grassMesh, water, clouds, pineTrees, bloomPass, stars, axesHelper } = sceneElements;
     const gui = new GUI();
     gui.domElement.style.top = '10px';
     gui.domElement.style.right = '10px';
-    
-    const updateSun = () => {
-        updateSunPosition(sky, directionalLight, params.elevation, params.azimuth);
-        const sunDirection = directionalLight.position.clone().normalize();
-        (water.material as THREE.ShaderMaterial).uniforms.sunDirection.value.copy(sunDirection);
-    };
 
-    const skyFolder = gui.addFolder('Sky & Sun');
-    skyFolder.add(params, 'turbidity', 0.0, 20.0, 0.1).onChange(() => sky.material.uniforms['turbidity'].value = params.turbidity);
-    skyFolder.add(params, 'rayleigh', 0.0, 4, 0.001).onChange(() => sky.material.uniforms['rayleigh'].value = params.rayleigh);
-    skyFolder.add(params, 'mieCoefficient', 0.0, 0.1, 0.001).onChange(() => sky.material.uniforms['mieCoefficient'].value = params.mieCoefficient);
-    skyFolder.add(params, 'mieDirectionalG', 0.0, 1, 0.001).onChange(() => sky.material.uniforms['mieDirectionalG'].value = params.mieDirectionalG);
-    skyFolder.add(params, 'elevation', 0, 90, 0.1).onChange(updateSun);
-    skyFolder.add(params, 'azimuth', -180, 180, 0.1).onChange(updateSun);
+    const worldFolder = gui.addFolder('World');
+    worldFolder.add(params, 'timeOfDay', 0, 24, 0.1).name('Time of Day').onChange(updateWorldState);
 
     const objectsFolder = gui.addFolder('Objects & Flora');
     objectsFolder.addColor(params, 'groundColor').name('Ground Color').onChange((value) => ground.material.color.set(value));
 
     const waterSubFolder = objectsFolder.addFolder('Pond');
-    waterSubFolder.addColor(params, 'waterColor').name('Tint').onChange((value) => {
-        (water.material as THREE.ShaderMaterial).uniforms.waterColor.value.set(value);
+    waterSubFolder.add(params, 'waterDistortion', 0, 8, 0.1).name('Distortion').onChange(v => {
+        (water.material as THREE.ShaderMaterial).uniforms.distortionScale.value = v;
     });
-    waterSubFolder.add((water.material as THREE.ShaderMaterial).uniforms.distortionScale, 'value', 0, 8, 0.1).name('Distortion');
     waterSubFolder.add(params, 'waterFlowSpeed', 0, 2, 0.01).name('Flow Speed');
     waterSubFolder.add(params, 'rippleIntensity', 0, 1, 0.01).name('Wave Intensity').onChange(v => {
         (water.material as THREE.ShaderMaterial).uniforms.rippleIntensity.value = v;
@@ -404,18 +579,22 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements, sc
     });
 
     const lightingFolder = gui.addFolder('Lighting');
-    lightingFolder.add(params, 'lightIntensity', 0, 5).name('Sun Intensity').onChange((value) => directionalLight.intensity = value);
+    lightingFolder.add(params, 'lightIntensity', 0, 5).name('Sun Intensity').onChange((value) => sceneElements.directionalLight.intensity = value);
     lightingFolder.addColor(params, 'sunColor').name('Sun Color').onChange(value => {
-        directionalLight.color.set(value);
+        sceneElements.directionalLight.color.set(value);
         (water.material as THREE.ShaderMaterial).uniforms.sunColor.value.set(value);
     });
-    lightingFolder.addColor(params, 'hemisphereSkyColor').name('Hemisphere Sky').onChange(value => hemisphereLight.color.set(value));
-    lightingFolder.addColor(params, 'hemisphereGroundColor').name('Hemisphere Ground').onChange(value => hemisphereLight.groundColor.set(value));
-    lightingFolder.add(params, 'hemisphereIntensity', 0, 5, 0.1).name('Hemisphere Intensity').onChange(value => hemisphereLight.intensity = value);
+    lightingFolder.addColor(params, 'hemisphereSkyColor').name('Hemisphere Sky').onChange(value => sceneElements.hemisphereLight.color.set(value));
+    lightingFolder.addColor(params, 'hemisphereGroundColor').name('Hemisphere Ground').onChange(value => sceneElements.hemisphereLight.groundColor.set(value));
+    lightingFolder.add(params, 'hemisphereIntensity', 0, 5, 0.1).name('Hemisphere Intensity').onChange(value => sceneElements.hemisphereLight.intensity = value);
    
+    const skyFolder = gui.addFolder('Sky Details');
+    skyFolder.add(params, 'turbidity', 0.0, 20.0, 0.1).onChange(() => sceneElements.sky.material.uniforms['turbidity'].value = params.turbidity);
+    skyFolder.add(params, 'rayleigh', 0.0, 4, 0.001).onChange(() => sceneElements.sky.material.uniforms['rayleigh'].value = params.rayleigh);
+    
     const shadowFolder = gui.addFolder('Shadows');
-    shadowFolder.add(params, 'shadowBias', -0.001, 0.001, 0.0001).name('Bias').onChange(value => directionalLight.shadow.bias = value);
-    shadowFolder.add(params, 'shadowRadius', 0, 10, 0.1).name('Softness').onChange(value => directionalLight.shadow.radius = value);
+    shadowFolder.add(params, 'shadowBias', -0.001, 0.001, 0.0001).name('Bias').onChange(value => sceneElements.directionalLight.shadow.bias = value);
+    shadowFolder.add(params, 'shadowRadius', 0, 10, 0.1).name('Softness').onChange(value => sceneElements.directionalLight.shadow.radius = value);
     
     const effectsFolder = gui.addFolder('Effects');
     effectsFolder.add(params, 'bloomThreshold', 0, 1, 0.01).name('Bloom Threshold').onChange(v => bloomPass.threshold = v);
@@ -427,15 +606,28 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements, sc
         if (scene.fog) {
             (scene.fog as THREE.FogExp2).color.set(value);
         }
-        if (scene.background instanceof THREE.Color) {
-            scene.background.set(value);
-        }
+        scene.background = new THREE.Color(value);
     });
     fogFolder.add(params, 'fogDensity', 0, 0.1, 0.001).name('Density').onChange((value) => {
         if (scene.fog instanceof THREE.FogExp2) {
             scene.fog.density = value;
         }
     });
+
+    const debugFolder = gui.addFolder('Debug & Stars');
+    debugFolder.add(axesHelper, 'visible').name('Show Axes Helper');
+    const updateStarParams = () => {
+        if (stars.userData.update) {
+            stars.userData.update({
+                count: params.starCount,
+                baseSize: params.starBaseSize,
+                color: params.starColor,
+            });
+        }
+    };
+    debugFolder.add(params, 'starCount', 1000, maxStarCount, 500).name('Star Count').onFinishChange(updateStarParams);
+    debugFolder.add(params, 'starBaseSize', 0.5, 5.0, 0.1).name('Star Base Size').onChange(updateStarParams);
+    debugFolder.addColor(params, 'starColor').name('Star Color').onChange(updateStarParams);
 
     return gui;
 }
@@ -455,7 +647,6 @@ const App: React.FC = () => {
         const camera = new THREE.PerspectiveCamera(75, currentMount.clientWidth / currentMount.clientHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         
-        // --- Parameters (local copy for GUI) ---
         const params = { ...initialParams };
 
         scene.fog = new THREE.FogExp2(params.fogColor, params.fogDensity);
@@ -487,8 +678,6 @@ const App: React.FC = () => {
         const directionalLight = createDirectionalLight();
         scene.add(directionalLight);
         
-        updateSunPosition(sky, directionalLight, params.elevation, params.azimuth);
-
         const ground = createGround();
         scene.add(ground);
         
@@ -502,8 +691,6 @@ const App: React.FC = () => {
         const water = createWater(
             waterGeometry,
             directionalLight.position.clone().normalize(),
-            params.waterColor,
-            params.sunColor,
             params
         );
         water.position.copy(pondPosition);
@@ -522,6 +709,20 @@ const App: React.FC = () => {
             color: params.cloudColor,
         });
         scene.add(clouds);
+        
+        const stars = createStars({
+            count: params.starCount,
+            baseSize: params.starBaseSize,
+            color: params.starColor,
+        });
+        scene.add(stars);
+
+        const moon = createMoon();
+        scene.add(moon);
+        
+        const axesHelper = new THREE.AxesHelper(5);
+        axesHelper.visible = false;
+        scene.add(axesHelper);
 
         // --- Post-processing ---
         const composer = new EffectComposer(renderer);
@@ -541,9 +742,111 @@ const App: React.FC = () => {
         camera.position.set(-15, 4, 15);
         controls.target.set(0, 1, 0);
         controls.update();
+        
+        const sceneElements: SceneElements = { sky, directionalLight, hemisphereLight, ground, grassMesh, water, clouds, pineTrees, stars, moon, bloomPass, axesHelper };
+
+        // --- Day/Night Cycle Logic ---
+        const dayNightPalettes = {
+            day: {
+                sunColor: new THREE.Color('#ffcb8e'),
+                hemisphereSky: new THREE.Color('#bde0fe'),
+                hemisphereGround: new THREE.Color('#6a994e'),
+                fog: new THREE.Color('#c5d1d9'),
+                cloud: new THREE.Color('#ffffff'),
+            },
+            sunset: {
+                sunColor: new THREE.Color('#ff6b00'),
+                hemisphereSky: new THREE.Color('#ff8c69'),
+                hemisphereGround: new THREE.Color('#5e4534'),
+                fog: new THREE.Color('#f2b279'),
+                cloud: new THREE.Color('#ffdab9'),
+            },
+            night: {
+                sunColor: new THREE.Color('#aaccff'), // Moonlight
+                hemisphereSky: new THREE.Color('#0a2a4f'),
+                hemisphereGround: new THREE.Color('#102820'),
+                fog: new THREE.Color('#08141e'),
+                cloud: new THREE.Color('#2c3e50'),
+            }
+        };
+
+        const updateWorldState = (timeOfDay: number) => {
+            params.timeOfDay = timeOfDay;
+
+            let elevation, turbidity, directIntensity, hemiIntensity, starOpacity;
+
+            if (timeOfDay >= 5 && timeOfDay < 7) { // Sunrise
+                const t = (timeOfDay - 5) / 2;
+                elevation = THREE.MathUtils.lerp(-2, 10, t);
+                turbidity = THREE.MathUtils.lerp(15, 10, t);
+                directIntensity = THREE.MathUtils.lerp(0.25, 1.5, t);
+                hemiIntensity = THREE.MathUtils.lerp(0.4, 0.6, t);
+                starOpacity = THREE.MathUtils.lerp(1.0, 0, t);
+                directionalLight.color.lerpColors(dayNightPalettes.sunset.sunColor, dayNightPalettes.day.sunColor, t);
+                hemisphereLight.color.lerpColors(dayNightPalettes.night.hemisphereSky, dayNightPalettes.day.hemisphereSky, t);
+                hemisphereLight.groundColor.lerpColors(dayNightPalettes.night.hemisphereGround, dayNightPalettes.day.hemisphereGround, t);
+                (scene.fog as THREE.FogExp2).color.lerpColors(dayNightPalettes.night.fog, dayNightPalettes.day.fog, t);
+                clouds.userData.setCloudColor(new THREE.Color().lerpColors(dayNightPalettes.night.cloud, dayNightPalettes.day.cloud, t));
+            } else if (timeOfDay >= 7 && timeOfDay < 18) { // Day
+                elevation = 10;
+                turbidity = 10;
+                directIntensity = 1.5;
+                hemiIntensity = 0.6;
+                starOpacity = 0;
+                directionalLight.color.copy(dayNightPalettes.day.sunColor);
+                hemisphereLight.color.copy(dayNightPalettes.day.hemisphereSky);
+                hemisphereLight.groundColor.copy(dayNightPalettes.day.hemisphereGround);
+                (scene.fog as THREE.FogExp2).color.copy(dayNightPalettes.day.fog);
+                 clouds.userData.setCloudColor(dayNightPalettes.day.cloud);
+            } else if (timeOfDay >= 18 && timeOfDay < 20) { // Sunset
+                const t = (timeOfDay - 18) / 2;
+                elevation = THREE.MathUtils.lerp(10, -2, t);
+                turbidity = THREE.MathUtils.lerp(10, 15, t);
+                directIntensity = THREE.MathUtils.lerp(1.5, 0.25, t);
+                hemiIntensity = THREE.MathUtils.lerp(0.6, 0.4, t);
+                starOpacity = THREE.MathUtils.lerp(0, 1.0, t);
+                directionalLight.color.lerpColors(dayNightPalettes.day.sunColor, dayNightPalettes.sunset.sunColor, t);
+                hemisphereLight.color.lerpColors(dayNightPalettes.day.hemisphereSky, dayNightPalettes.night.hemisphereSky, t);
+                hemisphereLight.groundColor.lerpColors(dayNightPalettes.day.hemisphereGround, dayNightPalettes.night.hemisphereGround, t);
+                (scene.fog as THREE.FogExp2).color.lerpColors(dayNightPalettes.day.fog, dayNightPalettes.night.fog, t);
+                clouds.userData.setCloudColor(new THREE.Color().lerpColors(dayNightPalettes.day.cloud, dayNightPalettes.night.cloud, t));
+            } else { // Night
+                elevation = -2;
+                turbidity = 15;
+                directIntensity = 0.25;
+                hemiIntensity = 0.4;
+                starOpacity = 1.0;
+                directionalLight.color.copy(dayNightPalettes.night.sunColor);
+                hemisphereLight.color.copy(dayNightPalettes.night.hemisphereSky);
+                hemisphereLight.groundColor.copy(dayNightPalettes.night.hemisphereGround);
+                (scene.fog as THREE.FogExp2).color.copy(dayNightPalettes.night.fog);
+                clouds.userData.setCloudColor(dayNightPalettes.night.cloud);
+            }
+
+            sky.material.uniforms['turbidity'].value = turbidity;
+            sky.material.uniforms['rayleigh'].value = elevation > 0 ? 0.582 : 0.1;
+            directionalLight.intensity = directIntensity;
+            hemisphereLight.intensity = hemiIntensity;
+            (stars.material as THREE.PointsMaterial).opacity = starOpacity;
+            scene.background = (scene.fog as THREE.FogExp2).color;
+
+            updateSunPosition(sky, directionalLight, elevation, params.azimuth);
+            
+            const sunVec = sky.material.uniforms.sunPosition.value.clone();
+            const moonPosition = sunVec.clone().negate().multiplyScalar(200);
+            moon.position.copy(moonPosition);
+            (moon.material as THREE.MeshBasicMaterial).opacity = starOpacity;
+
+
+            const sunDirection = directionalLight.position.clone().normalize();
+            (water.material as THREE.ShaderMaterial).uniforms.sunDirection.value.copy(sunDirection);
+            (water.material as THREE.ShaderMaterial).uniforms.sunColor.value.copy(directionalLight.color);
+        };
+        
+        updateWorldState(params.timeOfDay);
 
         // --- GUI ---
-        const gui = setupGUI(params, { sky, directionalLight, hemisphereLight, ground, grassMesh, water, clouds, pineTrees, bloomPass }, scene);
+        const gui = setupGUI(params, sceneElements, scene, updateWorldState);
 
         // --- Animation Loop ---
         const animate = () => {
@@ -551,9 +854,17 @@ const App: React.FC = () => {
             const elapsedTime = clock.getElapsedTime();
             const delta = clock.getDelta();
             const grassMaterial = grassMesh.material as THREE.MeshToonMaterial;
+            const treeMaterial = pineTrees.material as THREE.MeshToonMaterial;
+            const starMaterial = stars.material as THREE.PointsMaterial;
 
             if (grassMaterial.userData.shader) {
                 grassMaterial.userData.shader.uniforms.time.value = elapsedTime;
+            }
+            if (treeMaterial.userData.shader) {
+                treeMaterial.userData.shader.uniforms.time.value = elapsedTime;
+            }
+            if (starMaterial.userData.shader) {
+                starMaterial.userData.shader.uniforms.time.value = elapsedTime;
             }
 
             if (water.material) {
@@ -563,24 +874,24 @@ const App: React.FC = () => {
             if (clouds.userData.update) {
                 clouds.userData.update(delta, camera);
             }
+            
+            stars.rotation.y = elapsedTime * 0.01;
+            if ((moon.material as THREE.MeshBasicMaterial).opacity > 0) {
+                moon.lookAt(camera.position);
+            }
 
             // --- Interactivity Raycasting ---
             raycaster.setFromCamera(mouse, camera);
             const intersects = raycaster.intersectObjects([ground, water]);
 
-            // Reset grass push effect
-            if (grassMaterial.userData.shader) {
-                grassMaterial.userData.shader.uniforms.uMousePos.value.set(9999, 9999, 9999);
-            }
-
-            // Reset water interaction
-            if (water.material) {
-                (water.material as THREE.ShaderMaterial).uniforms.uMousePos.value.set(9999, 9999, 9999);
-            }
+            if (grassMaterial.userData.shader) grassMaterial.userData.shader.uniforms.uMousePos.value.set(9999, 9999, 9999);
+            if (treeMaterial.userData.shader) treeMaterial.userData.shader.uniforms.uMousePos.value.set(9999, 9999, 9999);
+            if (water.material) (water.material as THREE.ShaderMaterial).uniforms.uMousePos.value.set(9999, 9999, 9999);
 
             const groundIntersect = intersects.find(i => i.object === ground);
-            if (groundIntersect && grassMaterial.userData.shader) {
-                grassMaterial.userData.shader.uniforms.uMousePos.value.copy(groundIntersect.point);
+            if (groundIntersect) {
+                if (grassMaterial.userData.shader) grassMaterial.userData.shader.uniforms.uMousePos.value.copy(groundIntersect.point);
+                if (treeMaterial.userData.shader) treeMaterial.userData.shader.uniforms.uMousePos.value.copy(groundIntersect.point);
             }
 
             const waterIntersect = intersects.find(i => i.object === water);
@@ -627,9 +938,14 @@ const App: React.FC = () => {
             gui.destroy();
             controls.dispose();
             
-            // Dispose of the complex tree geometry and its custom texture
             pineTreeGeometry.dispose();
             needleTexture.dispose();
+            stars.geometry.dispose();
+            (stars.material as THREE.PointsMaterial).map?.dispose();
+            (stars.material as THREE.Material).dispose();
+            moon.geometry.dispose();
+            (moon.material as THREE.Material).dispose();
+
 
             scene.traverse(object => {
                 if (object instanceof THREE.Mesh) {
