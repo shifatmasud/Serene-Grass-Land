@@ -538,14 +538,12 @@ const App: React.FC = () => {
         renderer.outputColorSpace = THREE.SRGBColorSpace;
         currentMount.appendChild(renderer.domElement);
         
-        const controls = new OrbitControls(camera, renderer.domElement);
+        let controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.04;
         controls.maxPolarAngle = Math.PI / 2 - 0.05;
         
         controls.enablePan = false;
-        controls.minDistance = 5;
-        controls.maxDistance = 60;
         controls.rotateSpeed = 0.4;
         controls.zoomSpeed = 0.7;
 
@@ -618,9 +616,6 @@ const App: React.FC = () => {
         axesHelper.visible = false;
         scene.add(axesHelper);
 
-        // --- Game Mechanics Setup ---
-        const game = new Game(scene, camera, monolith, { position: pondPosition, radius: pondRadius });
-
         // --- Post-processing ---
         const composer = new EffectComposer(renderer);
         const renderPass = new RenderPass(scene, camera);
@@ -633,6 +628,9 @@ const App: React.FC = () => {
             params.bloomThreshold
         );
         composer.addPass(bloomPass);
+
+        // --- Game Mechanics Setup ---
+        const game = new Game(scene, camera, monolith, { position: pondPosition, radius: pondRadius }, renderer, composer);
 
 
         // --- Camera ---
@@ -743,11 +741,12 @@ const App: React.FC = () => {
         updateWorldState(params.timeOfDay);
         const gui = setupGUI(params, sceneElements, scene, updateWorldState);
 
-        const animate = () => {
-            animationFrameId = requestAnimationFrame(animate);
+        const animateSpectator = () => {
+            animationFrameId = requestAnimationFrame(animateSpectator);
             const elapsedTime = clock.getElapsedTime();
             const delta = clock.getDelta();
 
+            // --- Universal visual updates ---
             const grassMaterial = grassMesh.material as THREE.MeshToonMaterial;
             const treeMaterial = pineTrees.material as THREE.MeshToonMaterial;
             const starMaterial = stars.material as THREE.PointsMaterial;
@@ -762,52 +761,48 @@ const App: React.FC = () => {
             if (starMaterial.userData.shader) {
                 starMaterial.userData.shader.uniforms.time.value = elapsedTime;
             }
-
             if (water.material) {
                 (water.material as THREE.ShaderMaterial).uniforms.time.value += delta * params.waterFlowSpeed;
             }
             if (clouds.userData.update) clouds.userData.update(delta, camera);
-            
             stars.rotation.y = elapsedTime * 0.01;
             if ((moon.material as THREE.MeshBasicMaterial).opacity > 0) moon.lookAt(camera.position);
 
+            // --- Spectator-only logic ---
+            controls.update();
             raycaster.setFromCamera(mouse, camera);
 
-            if (gameState.current === 'spectator') {
-                 const intersects = raycaster.intersectObject(game.player);
-                const isHovering = intersects.length > 0;
-
-                if (isHovering && hoveredObject.current !== game.player) {
-                    hoveredObject.current = game.player;
-                    game.setPlayerHover(true);
-                    currentMount.style.cursor = 'pointer';
-                } else if (!isHovering && hoveredObject.current) {
-                    hoveredObject.current = null;
-                    game.setPlayerHover(false);
-                    currentMount.style.cursor = 'default';
-                }
-                controls.update();
-            } else { // 'playing' state
-                game.update(delta, elapsedTime);
+            // Player hover logic
+            const intersectsPlayer = raycaster.intersectObject(game.player);
+            const isHovering = intersectsPlayer.length > 0;
+            if (isHovering && hoveredObject.current !== game.player) {
+                hoveredObject.current = game.player;
+                game.setPlayerHover(true);
+                currentMount.style.cursor = 'pointer';
+            } else if (!isHovering && hoveredObject.current) {
+                hoveredObject.current = null;
+                game.setPlayerHover(false);
+                currentMount.style.cursor = 'default';
             }
             
-            const intersects = raycaster.intersectObjects([ground, water]);
+            // Environmental interaction logic
+            const intersectsEnv = raycaster.intersectObjects([ground, water]);
             if (grassMaterial.userData.shader) grassMaterial.userData.shader.uniforms.uMousePos.value.set(9999, 9999, 9999);
             if (treeMaterial.userData.shader) treeMaterial.userData.shader.uniforms.uMousePos.value.set(9999, 9999, 9999);
             if (water.material) (water.material as THREE.ShaderMaterial).uniforms.uMousePos.value.set(9999, 9999, 9999);
 
-            const groundIntersect = intersects.find(i => i.object === ground);
+            const groundIntersect = intersectsEnv.find(i => i.object === ground);
             if (groundIntersect) {
                 const interactPoint = groundIntersect.point;
                 if (grassMaterial.userData.shader) grassMaterial.userData.shader.uniforms.uMousePos.value.copy(interactPoint);
                 if (treeMaterial.userData.shader) treeMaterial.userData.shader.uniforms.uMousePos.value.copy(interactPoint);
             }
-            const waterIntersect = intersects.find(i => i.object === water);
+            const waterIntersect = intersectsEnv.find(i => i.object === water);
             if (waterIntersect && water.material) (water.material as THREE.ShaderMaterial).uniforms.uMousePos.value.copy(waterIntersect.point);
             
             composer.render();
         };
-        animate();
+        animateSpectator();
 
         const handleResize = () => {
             if (!currentMount) return;
@@ -820,6 +815,7 @@ const App: React.FC = () => {
             bloomPass.setSize(width, height);
         };
         const handleMouseMove = (event: MouseEvent) => {
+            if (gameState.current !== 'spectator') return;
             mouse.x = (event.clientX / currentMount.clientWidth) * 2 - 1;
             mouse.y = -(event.clientY / currentMount.clientHeight) * 2 + 1;
         };
@@ -832,9 +828,12 @@ const App: React.FC = () => {
 
         const handlePointerLockChange = () => {
             if (document.pointerLockElement === document.body) {
+                controls.dispose();
                 gameState.current = 'playing';
-                controls.enabled = false;
+
+                cancelAnimationFrame(animationFrameId);
                 game.startGame();
+
                 document.body.classList.add('playing');
                 if (hoveredObject.current) {
                     game.setPlayerHover(false);
@@ -843,9 +842,23 @@ const App: React.FC = () => {
                 }
             } else {
                 gameState.current = 'spectator';
-                controls.enabled = true;
                 game.stopGame();
+
+                // Reset camera to a good spectator position
+                camera.position.set(-15, 4, 15);
+                
+                controls = new OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.04;
+                controls.maxPolarAngle = Math.PI / 2 - 0.05;
+                controls.enablePan = false;
+                controls.rotateSpeed = 0.4;
+                controls.zoomSpeed = 0.7;
+                controls.target.copy(new THREE.Vector3(0, 1.5, 0));
+                controls.update();
+
                 document.body.classList.remove('playing');
+                animateSpectator();
             }
         };
 

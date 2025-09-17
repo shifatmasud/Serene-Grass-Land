@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Box3 } from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 
 const ORB_COUNT = 5;
 const PLAYER_SIZE = 1.0;
@@ -9,6 +10,8 @@ export class Game {
     private camera: THREE.PerspectiveCamera;
     private monolith: THREE.Mesh;
     private pond: { position: THREE.Vector3; radius: number };
+    private renderer: THREE.WebGLRenderer;
+    private composer: EffectComposer;
 
     public player: THREE.Mesh;
     private playerState = {
@@ -24,17 +27,31 @@ export class Game {
     private score = 0;
 
     private scoreElement: HTMLElement | null;
+    
+    // --- New Camera Control State ---
+    private cameraOffset = new THREE.Vector3(0, 2.5, 6.0); // height, distance
+    private cameraTargetOffset = new THREE.Vector3(0, 1.2, 0);
+    private cameraLookAt = new THREE.Vector3();
+    private cameraOrbit = new THREE.Quaternion();
+    private cameraEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+
+    private clock = new THREE.Clock();
+    private animationFrameId: number | null = null;
 
     constructor(
         scene: THREE.Scene,
         camera: THREE.PerspectiveCamera,
         monolith: THREE.Mesh,
-        pond: { position: THREE.Vector3; radius: number }
+        pond: { position: THREE.Vector3; radius: number },
+        renderer: THREE.WebGLRenderer,
+        composer: EffectComposer
     ) {
         this.scene = scene;
         this.camera = camera;
         this.monolith = monolith;
         this.pond = pond;
+        this.renderer = renderer;
+        this.composer = composer;
 
         this.scoreElement = document.getElementById('score');
         
@@ -65,16 +82,45 @@ export class Game {
         );
     }
 
+    private animate = () => {
+        this.animationFrameId = requestAnimationFrame(this.animate);
+        const delta = this.clock.getDelta();
+        const elapsedTime = this.clock.getElapsedTime();
+
+        this.update(delta, elapsedTime);
+        
+        this.composer.render();
+    }
+
     public startGame() {
         this.isActive = true;
-        this.camera.position.set(0, 5, 15); // Reset camera for gameplay
+        
+        // Position camera behind the player to start
+        const startOffset = new THREE.Vector3(0, 3, 7);
+        this.camera.position.copy(this.player.position).add(startOffset);
+        this.cameraLookAt.copy(this.player.position).add(this.cameraTargetOffset);
+        this.camera.lookAt(this.cameraLookAt);
+
+        // Initialize orbit controls from starting camera position
+        this.cameraEuler.setFromQuaternion(this.camera.quaternion, 'YXZ');
+        this.cameraOrbit.copy(this.camera.quaternion);
+        
         this.setupEventListeners();
+
+        this.clock.start();
+        this.animate();
     }
     
     public stopGame() {
         this.isActive = false;
         Object.keys(this.keysPressed).forEach(k => (this.keysPressed[k] = false));
+        this.playerState.velocity.set(0,0,0);
         this.disposeEventListeners();
+
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
     }
 
     private spawnOrbs = () => {
@@ -107,36 +153,37 @@ export class Game {
     };
 
     private updatePlayer(delta: number) {
-        const moveSpeed = 5.0; // units per second
-        const damping = 0.92;
+        const moveSpeed = 5.0;
+        const rotationSpeed = 10.0;
         const hoverHeight = 1.5;
 
         // --- Camera-relative movement calculation ---
-        const forward = new THREE.Vector3();
-        this.camera.getWorldDirection(forward);
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.cameraOrbit);
         forward.y = 0;
         forward.normalize();
         
-        const right = new THREE.Vector3().crossVectors(this.camera.up, forward).normalize();
+        const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
 
         const moveDirection = new THREE.Vector3();
         if (this.keysPressed.w) moveDirection.add(forward);
         if (this.keysPressed.s) moveDirection.sub(forward);
-        if (this.keysPressed.a) moveDirection.add(right);
-        if (this.keysPressed.d) moveDirection.sub(right);
+        if (this.keysPressed.a) moveDirection.sub(right);
+        if (this.keysPressed.d) moveDirection.add(right);
         
+        const targetVelocity = new THREE.Vector3();
         if (moveDirection.lengthSq() > 0) {
-             this.playerState.velocity.add(moveDirection.normalize().multiplyScalar(moveSpeed));
+             targetVelocity.copy(moveDirection.normalize().multiplyScalar(moveSpeed));
         }
         
-        const effectiveDamping = Math.pow(damping, delta * 60);
-        this.playerState.velocity.multiplyScalar(effectiveDamping);
+        // Smoothly interpolate velocity for acceleration/deceleration
+        const lerpFactor = 1.0 - Math.exp(-20 * delta); // frame-rate independent lerp
+        this.playerState.velocity.lerp(targetVelocity, lerpFactor);
         
         const moveStep = this.playerState.velocity.clone().multiplyScalar(delta);
 
+        // --- Collision Detection ---
         const monolithBBox = new Box3().setFromObject(this.monolith);
         const playerBBox = new Box3().setFromObject(this.player);
-
         playerBBox.translate(moveStep);
 
         if (!playerBBox.intersectsBox(monolithBBox)) {
@@ -146,6 +193,30 @@ export class Game {
         }
 
         this.player.position.y = hoverHeight;
+
+        // --- Player Rotation ---
+        if (this.playerState.velocity.lengthSq() > 0.01) {
+            const lookAtPosition = this.player.position.clone().add(this.playerState.velocity);
+            const targetMatrix = new THREE.Matrix4().lookAt(this.player.position, lookAtPosition, this.player.up);
+            const targetQuaternion = new THREE.Quaternion().setFromRotationMatrix(targetMatrix);
+            this.player.quaternion.slerp(targetQuaternion, delta * rotationSpeed);
+        }
+    }
+
+    private updateCamera(delta: number) {
+        // Calculate desired camera position by taking an offset and rotating it by the current orbit quaternion
+        const desiredPosition = this.player.position.clone();
+        const offset = this.cameraOffset.clone().applyQuaternion(this.cameraOrbit);
+        desiredPosition.add(offset);
+        
+        // Smoothly move the camera to its desired position
+        const lerpFactor = 1.0 - Math.exp(-15 * delta); // frame-rate independent lerp
+        this.camera.position.lerp(desiredPosition, lerpFactor);
+        
+        // Smoothly update the point the camera is looking at
+        const desiredLookAt = this.player.position.clone().add(this.cameraTargetOffset);
+        this.cameraLookAt.lerp(desiredLookAt, lerpFactor);
+        this.camera.lookAt(this.cameraLookAt);
     }
 
     private updateOrbs(delta: number, elapsedTime: number) {
@@ -167,6 +238,7 @@ export class Game {
     public update(delta: number, elapsedTime: number) {
         if (!this.isActive) return;
         this.updatePlayer(delta);
+        this.updateCamera(delta);
         this.updateOrbs(delta, elapsedTime);
     }
     
@@ -181,25 +253,19 @@ export class Game {
     };
 
     private handleMouseMove = (event: MouseEvent) => {
-        if (!this.isActive) return;
+        if (!this.isActive || !document.pointerLockElement) return;
 
         const movementX = event.movementX || 0;
         const movementY = event.movementY || 0;
-        const euler = new THREE.Euler(0, 0, 0, 'YXZ');
-        euler.setFromQuaternion(this.camera.quaternion);
-
-        euler.y -= movementX * 0.002;
-        euler.x -= movementY * 0.002;
+        
+        this.cameraEuler.y -= movementX * 0.002;
+        this.cameraEuler.x -= movementY * 0.002;
         
         const PI_2 = Math.PI / 2;
-        euler.x = Math.max(-PI_2, Math.min(PI_2, euler.x));
+        // Clamp the vertical rotation (pitch)
+        this.cameraEuler.x = Math.max(-PI_2 * 0.8, Math.min(PI_2 * 0.8, this.cameraEuler.x));
 
-        this.camera.quaternion.setFromEuler(euler);
-        
-        const offset = new THREE.Vector3(0, 2, 5);
-        offset.applyQuaternion(this.camera.quaternion);
-        this.camera.position.copy(this.player.position).add(offset);
-        this.camera.lookAt(this.player.position.clone().add(new THREE.Vector3(0,1,0)));
+        this.cameraOrbit.setFromEuler(this.cameraEuler);
     };
     
     private setupEventListeners() {
