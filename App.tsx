@@ -48,9 +48,11 @@ const initialParams = {
     bloomRadius: 0.3,
 
     // Water Ripples
-    rippleIntensity: 0.2,
+    rippleIntensity: 0.1,
     rippleScale: 2.0,
     rippleSpeed: 0.03,
+    interactiveRippleRadius: 5.0,
+    interactiveRippleStrength: 0.15,
 
     // Clouds
     cloudColor: '#ffffff',
@@ -274,14 +276,22 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements, sc
         (water.material as THREE.ShaderMaterial).uniforms.waterColor.value.set(value);
     });
     waterSubFolder.add((water.material as THREE.ShaderMaterial).uniforms.distortionScale, 'value', 0, 8, 0.1).name('Distortion');
-    waterSubFolder.add(params, 'rippleIntensity', 0, 1, 0.01).name('Ripple Intensity').onChange(v => {
+    waterSubFolder.add(params, 'rippleIntensity', 0, 1, 0.01).name('Wave Intensity').onChange(v => {
         (water.material as THREE.ShaderMaterial).uniforms.rippleIntensity.value = v;
     });
-    waterSubFolder.add(params, 'rippleScale', 0, 20, 0.1).name('Ripple Scale').onChange(v => {
+    waterSubFolder.add(params, 'rippleScale', 0, 20, 0.1).name('Wave Scale').onChange(v => {
         (water.material as THREE.ShaderMaterial).uniforms.rippleScale.value = v;
     });
-    waterSubFolder.add(params, 'rippleSpeed', 0, 0.2, 0.001).name('Ripple Speed').onChange(v => {
+    waterSubFolder.add(params, 'rippleSpeed', 0, 0.2, 0.001).name('Wave Speed').onChange(v => {
         (water.material as THREE.ShaderMaterial).uniforms.rippleSpeed.value = v;
+    });
+
+    const interactiveFolder = waterSubFolder.addFolder('Interactive Ripples');
+    interactiveFolder.add(params, 'interactiveRippleRadius', 1, 10, 0.1).name('Radius').onChange(v => {
+        (water.material as THREE.ShaderMaterial).uniforms.uRippleRadius.value = v;
+    });
+    interactiveFolder.add(params, 'interactiveRippleStrength', 0, 0.5, 0.01).name('Strength').onChange(v => {
+        (water.material as THREE.ShaderMaterial).uniforms.uRippleStrength.value = v;
     });
 
 
@@ -417,7 +427,8 @@ const App: React.FC = () => {
             waterGeometry,
             directionalLight.position.clone().normalize(),
             params.waterColor,
-            params.sunColor
+            params.sunColor,
+            params
         );
         water.position.copy(pondPosition);
         scene.add(water);
@@ -472,12 +483,30 @@ const App: React.FC = () => {
                 clouds.userData.update(delta, camera);
             }
 
+            // --- Interactivity Raycasting ---
             raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObject(ground);
+            const intersects = raycaster.intersectObjects([ground, water]);
 
-            if (intersects.length > 0 && grassMaterial.userData.shader) {
-                grassMaterial.userData.shader.uniforms.uMousePos.value.copy(intersects[0].point);
+            // Reset grass push effect
+            if (grassMaterial.userData.shader) {
+                grassMaterial.userData.shader.uniforms.uMousePos.value.set(9999, 9999, 9999);
             }
+
+            // Reset water interaction
+            if (water.material) {
+                (water.material as THREE.ShaderMaterial).uniforms.uMousePos.value.set(9999, 9999, 9999);
+            }
+
+            const groundIntersect = intersects.find(i => i.object === ground);
+            if (groundIntersect && grassMaterial.userData.shader) {
+                grassMaterial.userData.shader.uniforms.uMousePos.value.copy(groundIntersect.point);
+            }
+
+            const waterIntersect = intersects.find(i => i.object === water);
+            if (waterIntersect && water.material) {
+                (water.material as THREE.ShaderMaterial).uniforms.uMousePos.value.copy(waterIntersect.point);
+            }
+
 
             controls.update();
             composer.render();
