@@ -30,8 +30,8 @@ export function createWater(
     );
 
     const water = new Water(geometry, {
-        textureWidth: 512,
-        textureHeight: 512,
+        textureWidth: 256, // Reduced texture resolution
+        textureHeight: 256, // Reduced texture resolution
         waterNormals: waterNormals,
         sunDirection: sunDirection,
         sunColor: sunColor,

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 
 // --- New Soft & Blurry Cloud Texture Generator ---
 function createSoftCloudTexture() {
-    const size = 256;
+    const size = 128; // Reduced texture resolution
     const canvas = document.createElement('canvas');
     canvas.width = size;
     canvas.height = size;

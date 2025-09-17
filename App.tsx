@@ -1,3 +1,5 @@
+
+
 import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { GUI } from 'lil-gui';
@@ -9,6 +11,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { createClouds } from './Clouds';
 import { createWater } from './Water';
 import { Water } from 'three/addons/objects/Water.js';
+import { createPineTreeGeometry } from './pinetree';
 
 
 // --- Configuration ---
@@ -40,7 +43,8 @@ const initialParams = {
     azimuth: 180,
     
     // Flora
-    grassCount: 200000,
+    grassCount: 50000, // Reduced for smaller area and performance
+    treeCount: 5, // Reduced for performance as requested
 
     // Post-processing
     bloomStrength: 0.4,
@@ -48,6 +52,7 @@ const initialParams = {
     bloomRadius: 0.3,
 
     // Water Ripples
+    waterFlowSpeed: 0.5,
     rippleIntensity: 0.1,
     rippleScale: 2.0,
     rippleSpeed: 0.03,
@@ -63,8 +68,9 @@ const initialParams = {
     fogDensity: 0.015,
 };
 
-const maxGrassCount = 200000;
+const maxGrassCount = 50000; // Reduced
 const maxCloudCount = 50;
+const maxTreeCount = 5; // Reduced
 
 
 // --- Scene Element Creators ---
@@ -95,7 +101,7 @@ function createHemisphereLight() {
 function createDirectionalLight() {
     const light = new THREE.DirectionalLight(initialParams.sunColor, initialParams.lightIntensity);
     light.castShadow = true;
-    light.shadow.mapSize.set(2048, 2048);
+    light.shadow.mapSize.set(1024, 1024); // Reduced shadow map resolution
     light.shadow.camera.top = 30;
     light.shadow.camera.bottom = -30;
     light.shadow.camera.left = -30;
@@ -108,7 +114,7 @@ function createDirectionalLight() {
 }
 
 function createGround() {
-    const geometry = new THREE.PlaneGeometry(200, 200);
+    const geometry = new THREE.PlaneGeometry(100, 100); // Reduced ground area
     const material = new THREE.MeshToonMaterial({ color: initialParams.groundColor });
     const ground = new THREE.Mesh(geometry, material);
     ground.rotation.x = -Math.PI / 2;
@@ -208,7 +214,7 @@ function createGrass(pondPosition: THREE.Vector3, pondRadius: number) {
 
     const dummy = new THREE.Object3D();
     const color = new THREE.Color();
-    const areaSize = 100;
+    const areaSize = 50; // Reduced spawn area
     const pondCenter = new THREE.Vector2(pondPosition.x, pondPosition.z);
     const pondRadiusSq = pondRadius * pondRadius;
 
@@ -237,6 +243,71 @@ function createGrass(pondPosition: THREE.Vector3, pondRadius: number) {
     return grassMesh;
 }
 
+function createNeedleTexture(): THREE.CanvasTexture {
+    const size = 32; // Reduced texture resolution
+    const canvas = document.createElement('canvas');
+    canvas.width = 4;
+    canvas.height = size;
+    const context = canvas.getContext('2d');
+    if (!context) {
+        throw new Error('Could not get 2D context from canvas');
+    }
+
+    // A base color close to the foliage
+    context.fillStyle = '#4a6b5a';
+    context.fillRect(0, 0, 4, size);
+
+    // Add subtle lighter and darker vertical streaks for texture
+    context.fillStyle = 'rgba(255, 255, 255, 0.15)';
+    context.fillRect(1, 0, 1, size);
+    
+    context.fillStyle = 'rgba(0, 0, 0, 0.1)';
+    context.fillRect(3, 0, 1, size);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.needsUpdate = true;
+    return texture;
+}
+
+function createPineTrees(treeGeometry: THREE.BufferGeometry, needleTexture: THREE.Texture, pondPosition: THREE.Vector3, pondRadius: number) {
+    // FIX: Property 'specular' does not exist on type 'MeshToonMaterial'. This property was removed in recent versions of three.js.
+    // The line setting it has been removed to fix the error. MeshToonMaterial does not have traditional specular highlights.
+    const treeMaterial = new THREE.MeshToonMaterial({
+        vertexColors: true,
+        map: needleTexture,
+    });
+
+    const treeMesh = new THREE.InstancedMesh(treeGeometry, treeMaterial, maxTreeCount);
+    treeMesh.count = initialParams.treeCount;
+    treeMesh.castShadow = true;
+    treeMesh.receiveShadow = true;
+
+    const dummy = new THREE.Object3D();
+    const areaSize = 50; // Reduced spawn area
+    const pondCenter = new THREE.Vector2(pondPosition.x, pondPosition.z);
+    const pondRadiusSq = (pondRadius + 2) * (pondRadius + 2);
+
+    for (let i = 0; i < maxTreeCount; i++) {
+        let x, z;
+        do {
+            x = (Math.random() - 0.5) * areaSize;
+            z = (Math.random() - 0.5) * areaSize;
+        } while (new THREE.Vector2(x, z).distanceToSquared(pondCenter) < pondRadiusSq || Math.abs(x) < 20 && Math.abs(z) < 20); // Avoid central area
+
+        dummy.position.set(x, 0, z);
+        dummy.rotation.y = Math.random() * Math.PI * 2;
+        const scale = 1.2 + Math.random() * 0.8;
+        dummy.scale.set(scale, scale, scale);
+        dummy.updateMatrix();
+        treeMesh.setMatrixAt(i, dummy.matrix);
+    }
+    treeMesh.instanceMatrix.needsUpdate = true;
+    
+    return treeMesh;
+}
+
 type SceneElements = {
     sky: Sky;
     directionalLight: THREE.DirectionalLight;
@@ -245,11 +316,12 @@ type SceneElements = {
     grassMesh: THREE.InstancedMesh;
     water: Water;
     clouds: THREE.Group;
+    pineTrees: THREE.InstancedMesh;
     bloomPass: UnrealBloomPass;
 };
 
 function setupGUI(params: typeof initialParams, sceneElements: SceneElements, scene: THREE.Scene) {
-    const { sky, directionalLight, hemisphereLight, ground, grassMesh, water, clouds, bloomPass } = sceneElements;
+    const { sky, directionalLight, hemisphereLight, ground, grassMesh, water, clouds, pineTrees, bloomPass } = sceneElements;
     const gui = new GUI();
     gui.domElement.style.top = '10px';
     gui.domElement.style.right = '10px';
@@ -276,6 +348,7 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements, sc
         (water.material as THREE.ShaderMaterial).uniforms.waterColor.value.set(value);
     });
     waterSubFolder.add((water.material as THREE.ShaderMaterial).uniforms.distortionScale, 'value', 0, 8, 0.1).name('Distortion');
+    waterSubFolder.add(params, 'waterFlowSpeed', 0, 2, 0.01).name('Flow Speed');
     waterSubFolder.add(params, 'rippleIntensity', 0, 1, 0.01).name('Wave Intensity').onChange(v => {
         (water.material as THREE.ShaderMaterial).uniforms.rippleIntensity.value = v;
     });
@@ -313,6 +386,9 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements, sc
     });
     objectsFolder.add(params, 'grassCount', 1000, maxGrassCount, 1000).name('Grass Density').onChange((value) => {
         grassMesh.count = Math.floor(value);
+    });
+    objectsFolder.add(params, 'treeCount', 0, maxTreeCount, 1).name('Tree Density').onChange((value) => {
+        pineTrees.count = Math.floor(value);
     });
 
     const cloudsFolder = gui.addFolder('Clouds');
@@ -436,6 +512,11 @@ const App: React.FC = () => {
         const grassMesh = createGrass(pondPosition, pondRadius);
         scene.add(grassMesh);
 
+        const pineTreeGeometry = createPineTreeGeometry();
+        const needleTexture = createNeedleTexture();
+        const pineTrees = createPineTrees(pineTreeGeometry, needleTexture, pondPosition, pondRadius);
+        scene.add(pineTrees);
+
         const clouds = createClouds({
             count: params.cloudCount,
             color: params.cloudColor,
@@ -462,7 +543,7 @@ const App: React.FC = () => {
         controls.update();
 
         // --- GUI ---
-        const gui = setupGUI(params, { sky, directionalLight, hemisphereLight, ground, grassMesh, water, clouds, bloomPass }, scene);
+        const gui = setupGUI(params, { sky, directionalLight, hemisphereLight, ground, grassMesh, water, clouds, pineTrees, bloomPass }, scene);
 
         // --- Animation Loop ---
         const animate = () => {
@@ -476,7 +557,7 @@ const App: React.FC = () => {
             }
 
             if (water.material) {
-                (water.material as THREE.ShaderMaterial).uniforms.time.value += delta;
+                (water.material as THREE.ShaderMaterial).uniforms.time.value += delta * params.waterFlowSpeed;
             }
 
             if (clouds.userData.update) {
@@ -545,6 +626,10 @@ const App: React.FC = () => {
             }
             gui.destroy();
             controls.dispose();
+            
+            // Dispose of the complex tree geometry and its custom texture
+            pineTreeGeometry.dispose();
+            needleTexture.dispose();
 
             scene.traverse(object => {
                 if (object instanceof THREE.Mesh) {
