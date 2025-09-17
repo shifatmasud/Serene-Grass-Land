@@ -25,7 +25,7 @@
         --focus-color: #77d777;
         --font-size: 14px;
       }
-      #game-ui {
+      #ui-container {
         position: absolute;
         top: 0;
         left: 0;
@@ -35,6 +35,13 @@
         color: white;
         text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.7);
         font-weight: 500;
+      }
+      #score, #instructions {
+        opacity: 0;
+        transition: opacity 0.5s ease-in-out;
+      }
+      body.playing #score, body.playing #instructions {
+        opacity: 1;
       }
       #score {
         position: absolute;
@@ -48,11 +55,6 @@
         width: 100%;
         text-align: center;
         font-size: 1.1em;
-        opacity: 1;
-        transition: opacity 1s ease-in-out;
-      }
-      #instructions.hidden {
-        opacity: 0;
       }
     </style>
     <script type="importmap">
@@ -71,9 +73,9 @@
   </head>
   <body>
     <div id="root"></div>
-    <div id="game-ui">
+    <div id="ui-container">
       <div id="score">Orbs: 0 / 5</div>
-      <div id="instructions">WASD to Move &nbsp;&nbsp;|&nbsp;&nbsp; Space to Jump &nbsp;&nbsp;|&nbsp;&nbsp; Mouse to Look</div>
+      <div id="instructions">WASD to Move &nbsp;&nbsp;|&nbsp;&nbsp; Mouse to Look</div>
     </div>
     <script type="module" src="/index.tsx"></script>
   </body>
