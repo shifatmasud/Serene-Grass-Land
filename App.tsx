@@ -1,34 +1,47 @@
+
 import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { GUI } from 'lil-gui';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Sky } from 'three/addons/objects/Sky.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
 
 // --- Configuration ---
 const initialParams = {
-    groundColor: '#a08b6b', // Warm, dry earth
-    monolithColor: '#3a3a3a', // Slightly warmer dark grey
-    grassBaseColor: '#c4a553', // Golden, sun-kissed grass
-    grassEmissiveIntensity: 0.1, // For the grass glow
-    // Lighting params
-    lightIntensity: 2.0, // Brighter sun
-    sunColor: '#ffddaa', // Warm sun color
-    hemisphereSkyColor: '#ffad6b', // Warm orange ambient sky
-    hemisphereGroundColor: '#7d6b5b', // Warm earth bounce light
-    hemisphereIntensity: 2.0, // Increased to soften shadows
-    shadowBias: -0.0001,
-    shadowRadius: 1.5,
-    // Sky params
-    turbidity: 8.0,
-    rayleigh: 1.5,
-    mieCoefficient: 0.003,
-    mieDirectionalG: 0.95, // Tighter, more brilliant sun glow
-    elevation: 3, // Low sun for long shadows (golden hour)
-    azimuth: 160, // Sun position in the sky
-    grassCount: 70000,
+    // Ghibli-inspired palette
+    groundColor: '#6a994e', // Lush green ground
+    monolithColor: '#586F7C', // Weathered stone
+    grassBaseColor: '#a7c957', // Vibrant, sunlit grass
+    grassTipColor: '#f2e8cf', // Lighter, sun-kissed tips for gradient
+
+    // Lighting params for a bright, soft day
+    lightIntensity: 1.5,
+    sunColor: '#FFCB8E', // Warm, golden sun
+    hemisphereSkyColor: '#BDE0FE', // Light blue ambient from sky
+    hemisphereGroundColor: '#6a994e', // Green bounce light from ground
+    hemisphereIntensity: 1.0,
+    shadowBias: -0.001,
+    shadowRadius: 5.0, // Softer shadows
+
+    // Sky params for a clear, anime-style sky
+    turbidity: 2.0,
+    rayleigh: 3.0,
+    mieCoefficient: 0.005,
+    mieDirectionalG: 0.8,
+    elevation: 15, // Sun higher in the sky for a daytime feel
+    azimuth: 180, // Sun in the south
+    grassCount: 150000,
+
+    // Post-processing
+    bloomStrength: 0.4,
+    bloomThreshold: 0.85,
+    bloomRadius: 0.3,
 };
 
-const maxGrassCount = 100000;
+const maxGrassCount = 200000;
 
 // --- Scene Element Creators ---
 
@@ -72,7 +85,7 @@ function createDirectionalLight() {
 
 function createGround() {
     const geometry = new THREE.PlaneGeometry(200, 200);
-    const material = new THREE.MeshStandardMaterial({ color: initialParams.groundColor });
+    const material = new THREE.MeshToonMaterial({ color: initialParams.groundColor });
     const ground = new THREE.Mesh(geometry, material);
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
@@ -81,7 +94,7 @@ function createGround() {
 
 function createMonolith() {
     const geometry = new THREE.BoxGeometry(0.8, 2.5, 0.5);
-    const material = new THREE.MeshStandardMaterial({ color: initialParams.monolithColor, roughness: 0.8 });
+    const material = new THREE.MeshToonMaterial({ color: initialParams.monolithColor });
     const monolith = new THREE.Mesh(geometry, material);
     monolith.position.set(0, 1.25, -15);
     monolith.castShadow = true;
@@ -92,36 +105,43 @@ function createMonolith() {
 function createGrass() {
     const grassBladeHeight = 1.0;
     const grassGeometry = new THREE.PlaneGeometry(0.1, grassBladeHeight, 1, 2);
-    grassGeometry.translate(0, grassBladeHeight / 2, 0); 
-    
+    grassGeometry.translate(0, grassBladeHeight / 2, 0);
+
     const positions = grassGeometry.attributes.position;
     positions.setX(0, 0);
     positions.setX(1, 0);
     positions.needsUpdate = true;
     grassGeometry.computeVertexNormals();
 
-    const grassMaterial = new THREE.MeshStandardMaterial({
+    const grassMaterial = new THREE.MeshToonMaterial({
         side: THREE.DoubleSide,
         vertexColors: true,
-        emissive: initialParams.grassBaseColor,
-        emissiveIntensity: initialParams.grassEmissiveIntensity,
+        color: initialParams.grassBaseColor,
     });
 
     grassMaterial.onBeforeCompile = (shader) => {
         shader.uniforms.time = { value: 0 };
         shader.uniforms.uMousePos = { value: new THREE.Vector3(9999, 9999, 9999) };
-        
+        shader.uniforms.uGrassTipColor = { value: new THREE.Color(initialParams.grassTipColor) };
+
         shader.vertexShader = `
             uniform float time;
             uniform vec3 uMousePos;
             varying vec3 vWorldPosition;
+            varying float vRelativeHeight;
         \n` + shader.vertexShader;
         
+        shader.fragmentShader = `
+            uniform vec3 uGrassTipColor;
+            varying float vRelativeHeight;
+        \n` + shader.fragmentShader;
+
         shader.vertexShader = shader.vertexShader.replace(
             '#include <begin_vertex>',
             `
                 #include <begin_vertex>
                 vWorldPosition = (instanceMatrix * vec4(position, 1.0)).xyz;
+                vRelativeHeight = position.y / ${grassBladeHeight.toFixed(1)};
 
                 // Wind Effect
                 float windStrength = 0.15;
@@ -145,6 +165,14 @@ function createGrass() {
                     
                     transformed.xyz += pushDir * falloff * pushStrength * pushSway;
                 }
+            `
+        );
+
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <color_fragment>',
+            `
+                #include <color_fragment>
+                diffuseColor.rgb = mix(diffuseColor.rgb, uGrassTipColor, vRelativeHeight);
             `
         );
         grassMaterial.userData.shader = shader;
@@ -184,12 +212,13 @@ type SceneElements = {
     sky: Sky;
     directionalLight: THREE.DirectionalLight;
     hemisphereLight: THREE.HemisphereLight;
-    ground: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial>;
+    ground: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshToonMaterial>;
     grassMesh: THREE.InstancedMesh;
+    bloomPass: UnrealBloomPass;
 };
 
 function setupGUI(params: typeof initialParams, sceneElements: SceneElements) {
-    const { sky, directionalLight, hemisphereLight, ground, grassMesh } = sceneElements;
+    const { sky, directionalLight, hemisphereLight, ground, grassMesh, bloomPass } = sceneElements;
     const gui = new GUI();
     gui.domElement.style.top = '10px';
     gui.domElement.style.right = '10px';
@@ -207,8 +236,8 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements) {
     const objectsFolder = gui.addFolder('Objects & Flora');
     objectsFolder.addColor(params, 'groundColor').name('Ground Color').onChange((value) => ground.material.color.set(value));
     const color = new THREE.Color();
-    objectsFolder.addColor(params, 'grassBaseColor').name('Grass Color').onChange((value) => {
-        (grassMesh.material as THREE.MeshStandardMaterial).emissive.set(value);
+    objectsFolder.addColor(params, 'grassBaseColor').name('Grass Base Color').onChange((value) => {
+        (grassMesh.material as THREE.MeshToonMaterial).color.set(value);
         for (let i = 0; i < grassMesh.count; i++) {
             color.set(value);
             color.multiplyScalar(0.8 + Math.random() * 0.4);
@@ -216,8 +245,13 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements) {
         }
         if (grassMesh.instanceColor) grassMesh.instanceColor.needsUpdate = true;
     });
-    objectsFolder.add(params, 'grassEmissiveIntensity', 0, 1, 0.01).name('Grass Glow').onChange((value) => {
-        (grassMesh.material as THREE.MeshStandardMaterial).emissiveIntensity = value;
+     objectsFolder.addColor(params, 'grassTipColor').name('Grass Tip Color').onChange((value) => {
+        // Fix: Cast `grassMesh.material` to a single material type to access `userData`.
+        // The `material` property can be an array, which doesn't have `userData`.
+        const material = grassMesh.material as THREE.MeshToonMaterial;
+        if (material.userData.shader) {
+            (material.userData.shader as any).uniforms.uGrassTipColor.value.set(value);
+        }
     });
     objectsFolder.add(params, 'grassCount', 1000, maxGrassCount, 1000).name('Grass Density').onChange((value) => {
         grassMesh.count = Math.floor(value);
@@ -233,6 +267,11 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements) {
     const shadowFolder = gui.addFolder('Shadows');
     shadowFolder.add(params, 'shadowBias', -0.001, 0.001, 0.0001).name('Bias').onChange(value => directionalLight.shadow.bias = value);
     shadowFolder.add(params, 'shadowRadius', 0, 10, 0.1).name('Softness').onChange(value => directionalLight.shadow.radius = value);
+    
+    const effectsFolder = gui.addFolder('Effects');
+    effectsFolder.add(params, 'bloomThreshold', 0, 1, 0.01).name('Bloom Threshold').onChange(v => bloomPass.threshold = v);
+    effectsFolder.add(params, 'bloomStrength', 0, 3, 0.01).name('Bloom Strength').onChange(v => bloomPass.strength = v);
+    effectsFolder.add(params, 'bloomRadius', 0, 1, 0.01).name('Bloom Radius').onChange(v => bloomPass.radius = v);
 
     return gui;
 }
@@ -291,19 +330,33 @@ const App: React.FC = () => {
         const grassMesh = createGrass();
         scene.add(grassMesh);
 
+        // --- Post-processing ---
+        const composer = new EffectComposer(renderer);
+        const renderPass = new RenderPass(scene, camera);
+        composer.addPass(renderPass);
+        
+        const bloomPass = new UnrealBloomPass(
+            new THREE.Vector2(currentMount.clientWidth, currentMount.clientHeight),
+            params.bloomStrength,
+            params.bloomRadius,
+            params.bloomThreshold
+        );
+        composer.addPass(bloomPass);
+
+
         // --- Camera ---
         camera.position.set(-15, 4, 15);
         controls.target.set(0, 1, 0);
         controls.update();
 
         // --- GUI ---
-        const gui = setupGUI(params, { sky, directionalLight, hemisphereLight, ground, grassMesh });
+        const gui = setupGUI(params, { sky, directionalLight, hemisphereLight, ground, grassMesh, bloomPass });
 
         // --- Animation Loop ---
         const animate = () => {
             animationFrameId = requestAnimationFrame(animate);
             const elapsedTime = clock.getElapsedTime();
-            const grassMaterial = grassMesh.material as THREE.MeshStandardMaterial;
+            const grassMaterial = grassMesh.material as THREE.MeshToonMaterial;
 
             if (grassMaterial.userData.shader) {
                 grassMaterial.userData.shader.uniforms.time.value = elapsedTime;
@@ -317,16 +370,22 @@ const App: React.FC = () => {
             }
 
             controls.update();
-            renderer.render(scene, camera);
+            composer.render();
         };
         animate();
 
         // --- Event Listeners & Cleanup ---
         const handleResize = () => {
             if (!currentMount) return;
-            camera.aspect = currentMount.clientWidth / currentMount.clientHeight;
+            const width = currentMount.clientWidth;
+            const height = currentMount.clientHeight;
+            
+            camera.aspect = width / height;
             camera.updateProjectionMatrix();
-            renderer.setSize(currentMount.clientWidth, currentMount.clientHeight);
+            
+            renderer.setSize(width, height);
+            composer.setSize(width, height);
+            bloomPass.setSize(width, height);
         };
 
         const handleMouseMove = (event: MouseEvent) => {
