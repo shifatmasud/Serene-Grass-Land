@@ -7,6 +7,7 @@ import { Sky } from 'three/addons/objects/Sky.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { createClouds } from './Clouds';
 
 
 // --- Configuration ---
@@ -39,9 +40,15 @@ const initialParams = {
     bloomStrength: 0.4,
     bloomThreshold: 0.85,
     bloomRadius: 0.3,
+
+    // Clouds
+    cloudColor: '#ffffff',
+    cloudCount: 25,
 };
 
 const maxGrassCount = 200000;
+const maxCloudCount = 50;
+
 
 // --- Scene Element Creators ---
 
@@ -214,11 +221,12 @@ type SceneElements = {
     hemisphereLight: THREE.HemisphereLight;
     ground: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshToonMaterial>;
     grassMesh: THREE.InstancedMesh;
+    clouds: THREE.Group;
     bloomPass: UnrealBloomPass;
 };
 
 function setupGUI(params: typeof initialParams, sceneElements: SceneElements) {
-    const { sky, directionalLight, hemisphereLight, ground, grassMesh, bloomPass } = sceneElements;
+    const { sky, directionalLight, hemisphereLight, ground, grassMesh, clouds, bloomPass } = sceneElements;
     const gui = new GUI();
     gui.domElement.style.top = '10px';
     gui.domElement.style.right = '10px';
@@ -246,8 +254,6 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements) {
         if (grassMesh.instanceColor) grassMesh.instanceColor.needsUpdate = true;
     });
      objectsFolder.addColor(params, 'grassTipColor').name('Grass Tip Color').onChange((value) => {
-        // Fix: Cast `grassMesh.material` to a single material type to access `userData`.
-        // The `material` property can be an array, which doesn't have `userData`.
         const material = grassMesh.material as THREE.MeshToonMaterial;
         if (material.userData.shader) {
             (material.userData.shader as any).uniforms.uGrassTipColor.value.set(value);
@@ -255,6 +261,18 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements) {
     });
     objectsFolder.add(params, 'grassCount', 1000, maxGrassCount, 1000).name('Grass Density').onChange((value) => {
         grassMesh.count = Math.floor(value);
+    });
+
+    const cloudsFolder = gui.addFolder('Clouds');
+    cloudsFolder.add(params, 'cloudCount', 0, maxCloudCount, 1).name('Cloud Count').onChange((value) => {
+        if (clouds.userData.setCloudCount) {
+            clouds.userData.setCloudCount(value);
+        }
+    });
+    cloudsFolder.addColor(params, 'cloudColor').name('Cloud Color').onChange((value) => {
+        if (clouds.userData.setCloudColor) {
+            clouds.userData.setCloudColor(value);
+        }
     });
 
     const lightingFolder = gui.addFolder('Lighting');
@@ -330,6 +348,12 @@ const App: React.FC = () => {
         const grassMesh = createGrass();
         scene.add(grassMesh);
 
+        const clouds = createClouds({
+            count: params.cloudCount,
+            color: params.cloudColor,
+        });
+        scene.add(clouds);
+
         // --- Post-processing ---
         const composer = new EffectComposer(renderer);
         const renderPass = new RenderPass(scene, camera);
@@ -350,16 +374,21 @@ const App: React.FC = () => {
         controls.update();
 
         // --- GUI ---
-        const gui = setupGUI(params, { sky, directionalLight, hemisphereLight, ground, grassMesh, bloomPass });
+        const gui = setupGUI(params, { sky, directionalLight, hemisphereLight, ground, grassMesh, clouds, bloomPass });
 
         // --- Animation Loop ---
         const animate = () => {
             animationFrameId = requestAnimationFrame(animate);
             const elapsedTime = clock.getElapsedTime();
+            const delta = clock.getDelta();
             const grassMaterial = grassMesh.material as THREE.MeshToonMaterial;
 
             if (grassMaterial.userData.shader) {
                 grassMaterial.userData.shader.uniforms.time.value = elapsedTime;
+            }
+
+            if (clouds.userData.update) {
+                clouds.userData.update(delta, camera);
             }
 
             raycaster.setFromCamera(mouse, camera);
@@ -414,7 +443,7 @@ const App: React.FC = () => {
                          if (Array.isArray(object.material)) {
                             object.material.forEach(material => material.dispose());
                         } else {
-                            object.material.dispose();
+                            (object.material as THREE.Material).dispose();
                         }
                     }
                 }
