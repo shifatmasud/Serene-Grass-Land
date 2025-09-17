@@ -1,5 +1,3 @@
-
-
 import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { GUI } from 'lil-gui';
@@ -9,12 +7,15 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { createClouds } from './Clouds';
+import { createWater } from './Water';
+import { Water } from 'three/addons/objects/Water.js';
 
 
 // --- Configuration ---
 const initialParams = {
     // Default Preset Values
     groundColor: '#2fa753',
+    waterColor: '#d4f1f9',
     monolithColor: '#586F7C',
     grassBaseColor: '#a7c957',
     grassTipColor: '#55aa6f',
@@ -46,9 +47,18 @@ const initialParams = {
     bloomThreshold: 0.85,
     bloomRadius: 0.3,
 
+    // Water Ripples
+    rippleIntensity: 0.2,
+    rippleScale: 2.0,
+    rippleSpeed: 0.03,
+
     // Clouds
     cloudColor: '#ffffff',
     cloudCount: 10,
+
+    // Fog
+    fogColor: '#c5d1d9',
+    fogDensity: 0.015,
 };
 
 const maxGrassCount = 200000;
@@ -114,7 +124,7 @@ function createMonolith() {
     return monolith;
 }
 
-function createGrass() {
+function createGrass(pondPosition: THREE.Vector3, pondRadius: number) {
     const grassBladeHeight = 1.0;
     const grassGeometry = new THREE.PlaneGeometry(0.1, grassBladeHeight, 1, 2);
     grassGeometry.translate(0, grassBladeHeight / 2, 0);
@@ -197,12 +207,17 @@ function createGrass() {
     const dummy = new THREE.Object3D();
     const color = new THREE.Color();
     const areaSize = 100;
+    const pondCenter = new THREE.Vector2(pondPosition.x, pondPosition.z);
+    const pondRadiusSq = pondRadius * pondRadius;
+
     for (let i = 0; i < maxGrassCount; i++) {
-        dummy.position.set(
-            (Math.random() - 0.5) * areaSize,
-            0,
-            (Math.random() - 0.5) * areaSize
-        );
+        let x, z;
+        do {
+            x = (Math.random() - 0.5) * areaSize;
+            z = (Math.random() - 0.5) * areaSize;
+        } while (new THREE.Vector2(x, z).distanceToSquared(pondCenter) < pondRadiusSq);
+
+        dummy.position.set(x, 0, z);
         dummy.rotation.y = Math.random() * Math.PI;
         dummy.scale.setScalar(0.7 + Math.random() * 0.6);
         dummy.updateMatrix();
@@ -226,17 +241,22 @@ type SceneElements = {
     hemisphereLight: THREE.HemisphereLight;
     ground: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshToonMaterial>;
     grassMesh: THREE.InstancedMesh;
+    water: Water;
     clouds: THREE.Group;
     bloomPass: UnrealBloomPass;
 };
 
-function setupGUI(params: typeof initialParams, sceneElements: SceneElements) {
-    const { sky, directionalLight, hemisphereLight, ground, grassMesh, clouds, bloomPass } = sceneElements;
+function setupGUI(params: typeof initialParams, sceneElements: SceneElements, scene: THREE.Scene) {
+    const { sky, directionalLight, hemisphereLight, ground, grassMesh, water, clouds, bloomPass } = sceneElements;
     const gui = new GUI();
     gui.domElement.style.top = '10px';
     gui.domElement.style.right = '10px';
     
-    const updateSun = () => updateSunPosition(sky, directionalLight, params.elevation, params.azimuth);
+    const updateSun = () => {
+        updateSunPosition(sky, directionalLight, params.elevation, params.azimuth);
+        const sunDirection = directionalLight.position.clone().normalize();
+        (water.material as THREE.ShaderMaterial).uniforms.sunDirection.value.copy(sunDirection);
+    };
 
     const skyFolder = gui.addFolder('Sky & Sun');
     skyFolder.add(params, 'turbidity', 0.0, 20.0, 0.1).onChange(() => sky.material.uniforms['turbidity'].value = params.turbidity);
@@ -248,6 +268,23 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements) {
 
     const objectsFolder = gui.addFolder('Objects & Flora');
     objectsFolder.addColor(params, 'groundColor').name('Ground Color').onChange((value) => ground.material.color.set(value));
+
+    const waterSubFolder = objectsFolder.addFolder('Pond');
+    waterSubFolder.addColor(params, 'waterColor').name('Tint').onChange((value) => {
+        (water.material as THREE.ShaderMaterial).uniforms.waterColor.value.set(value);
+    });
+    waterSubFolder.add((water.material as THREE.ShaderMaterial).uniforms.distortionScale, 'value', 0, 8, 0.1).name('Distortion');
+    waterSubFolder.add(params, 'rippleIntensity', 0, 1, 0.01).name('Ripple Intensity').onChange(v => {
+        (water.material as THREE.ShaderMaterial).uniforms.rippleIntensity.value = v;
+    });
+    waterSubFolder.add(params, 'rippleScale', 0, 20, 0.1).name('Ripple Scale').onChange(v => {
+        (water.material as THREE.ShaderMaterial).uniforms.rippleScale.value = v;
+    });
+    waterSubFolder.add(params, 'rippleSpeed', 0, 0.2, 0.001).name('Ripple Speed').onChange(v => {
+        (water.material as THREE.ShaderMaterial).uniforms.rippleSpeed.value = v;
+    });
+
+
     const color = new THREE.Color();
     objectsFolder.addColor(params, 'grassBaseColor').name('Grass Base Color').onChange((value) => {
         (grassMesh.material as THREE.MeshToonMaterial).color.set(value);
@@ -282,7 +319,10 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements) {
 
     const lightingFolder = gui.addFolder('Lighting');
     lightingFolder.add(params, 'lightIntensity', 0, 5).name('Sun Intensity').onChange((value) => directionalLight.intensity = value);
-    lightingFolder.addColor(params, 'sunColor').name('Sun Color').onChange(value => directionalLight.color.set(value));
+    lightingFolder.addColor(params, 'sunColor').name('Sun Color').onChange(value => {
+        directionalLight.color.set(value);
+        (water.material as THREE.ShaderMaterial).uniforms.sunColor.value.set(value);
+    });
     lightingFolder.addColor(params, 'hemisphereSkyColor').name('Hemisphere Sky').onChange(value => hemisphereLight.color.set(value));
     lightingFolder.addColor(params, 'hemisphereGroundColor').name('Hemisphere Ground').onChange(value => hemisphereLight.groundColor.set(value));
     lightingFolder.add(params, 'hemisphereIntensity', 0, 5, 0.1).name('Hemisphere Intensity').onChange(value => hemisphereLight.intensity = value);
@@ -295,6 +335,21 @@ function setupGUI(params: typeof initialParams, sceneElements: SceneElements) {
     effectsFolder.add(params, 'bloomThreshold', 0, 1, 0.01).name('Bloom Threshold').onChange(v => bloomPass.threshold = v);
     effectsFolder.add(params, 'bloomStrength', 0, 3, 0.01).name('Bloom Strength').onChange(v => bloomPass.strength = v);
     effectsFolder.add(params, 'bloomRadius', 0, 1, 0.01).name('Bloom Radius').onChange(v => bloomPass.radius = v);
+
+    const fogFolder = gui.addFolder('Fog');
+    fogFolder.addColor(params, 'fogColor').name('Color').onChange((value) => {
+        if (scene.fog) {
+            (scene.fog as THREE.FogExp2).color.set(value);
+        }
+        if (scene.background instanceof THREE.Color) {
+            scene.background.set(value);
+        }
+    });
+    fogFolder.add(params, 'fogDensity', 0, 0.1, 0.001).name('Density').onChange((value) => {
+        if (scene.fog instanceof THREE.FogExp2) {
+            scene.fog.density = value;
+        }
+    });
 
     return gui;
 }
@@ -313,6 +368,13 @@ const App: React.FC = () => {
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(75, currentMount.clientWidth / currentMount.clientHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
+        
+        // --- Parameters (local copy for GUI) ---
+        const params = { ...initialParams };
+
+        scene.fog = new THREE.FogExp2(params.fogColor, params.fogDensity);
+        scene.background = new THREE.Color(params.fogColor);
+
         renderer.setSize(currentMount.clientWidth, currentMount.clientHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
         renderer.shadowMap.enabled = true;
@@ -328,9 +390,6 @@ const App: React.FC = () => {
         const clock = new THREE.Clock();
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
-        
-        // --- Parameters (local copy for GUI) ---
-        const params = { ...initialParams };
         
         // --- Create and Add Scene Objects ---
         const sky = createSky();
@@ -350,7 +409,20 @@ const App: React.FC = () => {
         const monolith = createMonolith();
         scene.add(monolith);
 
-        const grassMesh = createGrass();
+        const pondPosition = new THREE.Vector3(10, 0.05, 5);
+        const pondRadius = 15;
+
+        const waterGeometry = new THREE.CircleGeometry(pondRadius, 64);
+        const water = createWater(
+            waterGeometry,
+            directionalLight.position.clone().normalize(),
+            params.waterColor,
+            params.sunColor
+        );
+        water.position.copy(pondPosition);
+        scene.add(water);
+
+        const grassMesh = createGrass(pondPosition, pondRadius);
         scene.add(grassMesh);
 
         const clouds = createClouds({
@@ -379,7 +451,7 @@ const App: React.FC = () => {
         controls.update();
 
         // --- GUI ---
-        const gui = setupGUI(params, { sky, directionalLight, hemisphereLight, ground, grassMesh, clouds, bloomPass });
+        const gui = setupGUI(params, { sky, directionalLight, hemisphereLight, ground, grassMesh, water, clouds, bloomPass }, scene);
 
         // --- Animation Loop ---
         const animate = () => {
@@ -390,6 +462,10 @@ const App: React.FC = () => {
 
             if (grassMaterial.userData.shader) {
                 grassMaterial.userData.shader.uniforms.time.value = elapsedTime;
+            }
+
+            if (water.material) {
+                (water.material as THREE.ShaderMaterial).uniforms.time.value += delta;
             }
 
             if (clouds.userData.update) {
