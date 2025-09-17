@@ -1,4 +1,5 @@
 
+
 import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { GUI } from 'lil-gui';
@@ -12,29 +13,33 @@ import { createClouds } from './Clouds';
 
 // --- Configuration ---
 const initialParams = {
-    // Ghibli-inspired palette
-    groundColor: '#6a994e', // Lush green ground
-    monolithColor: '#586F7C', // Weathered stone
-    grassBaseColor: '#a7c957', // Vibrant, sunlit grass
-    grassTipColor: '#f2e8cf', // Lighter, sun-kissed tips for gradient
+    // Default Preset Values
+    groundColor: '#2fa753',
+    monolithColor: '#586F7C',
+    grassBaseColor: '#a7c957',
+    grassTipColor: '#55aa6f',
 
-    // Lighting params for a bright, soft day
+    // Lighting
     lightIntensity: 1.5,
-    sunColor: '#FFCB8E', // Warm, golden sun
-    hemisphereSkyColor: '#BDE0FE', // Light blue ambient from sky
-    hemisphereGroundColor: '#6a994e', // Green bounce light from ground
-    hemisphereIntensity: 1.0,
-    shadowBias: -0.001,
-    shadowRadius: 5.0, // Softer shadows
+    sunColor: '#ffcb8e',
+    hemisphereSkyColor: '#bde0fe',
+    hemisphereGroundColor: '#6a994e',
+    hemisphereIntensity: 0.6,
+    
+    // Shadows
+    shadowBias: -0.0005,
+    shadowRadius: 8.2,
 
-    // Sky params for a clear, anime-style sky
-    turbidity: 2.0,
-    rayleigh: 3.0,
-    mieCoefficient: 0.005,
-    mieDirectionalG: 0.8,
-    elevation: 15, // Sun higher in the sky for a daytime feel
-    azimuth: 180, // Sun in the south
-    grassCount: 150000,
+    // Sky & Sun
+    turbidity: 10.3,
+    rayleigh: 0.582,
+    mieCoefficient: 0.015,
+    mieDirectionalG: 0.361,
+    elevation: 21.1,
+    azimuth: 180,
+    
+    // Flora
+    grassCount: 200000,
 
     // Post-processing
     bloomStrength: 0.4,
@@ -43,7 +48,7 @@ const initialParams = {
 
     // Clouds
     cloudColor: '#ffffff',
-    cloudCount: 25,
+    cloudCount: 10,
 };
 
 const maxGrassCount = 200000;
