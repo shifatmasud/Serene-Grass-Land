@@ -13,6 +13,7 @@ import { Water } from 'three/addons/objects/Water.js';
 import { createPineTreeGeometry } from './pinetree';
 import { createGrass } from './grass';
 import { createGround, createMonolith } from './land';
+import { Box3 } from 'three';
 
 
 // --- Configuration ---
@@ -538,12 +539,11 @@ const App: React.FC = () => {
         controls.dampingFactor = 0.04;
         controls.maxPolarAngle = Math.PI / 2 - 0.05;
         
-        // --- Smooth Controls Enhancements ---
-        controls.enablePan = false; // Disable panning to keep focus on the center
-        controls.minDistance = 5;   // Prevent zooming in too close
-        controls.maxDistance = 60;  // Prevent zooming out too far
-        controls.rotateSpeed = 0.4; // Slow down rotation for a smoother feel
-        controls.zoomSpeed = 0.7;   // Adjust zoom speed for better control
+        controls.enablePan = false;
+        controls.minDistance = 5;
+        controls.maxDistance = 60;
+        controls.rotateSpeed = 0.4;
+        controls.zoomSpeed = 0.7;
 
         const clock = new THREE.Clock();
         const raycaster = new THREE.Raycaster();
@@ -614,6 +614,61 @@ const App: React.FC = () => {
         axesHelper.visible = false;
         scene.add(axesHelper);
 
+        // --- Game Mechanics Setup ---
+        const playerSize = 1.0;
+        const playerGeometry = new THREE.BoxGeometry(playerSize, playerSize, playerSize);
+        const playerMaterial = new THREE.MeshToonMaterial({ color: '#fca311' });
+        const player = new THREE.Mesh(playerGeometry, playerMaterial);
+        player.position.set(0, playerSize / 2, 5);
+        player.castShadow = true;
+        scene.add(player);
+
+        const playerState = {
+            velocity: new THREE.Vector3(),
+            onGround: false,
+        };
+
+        const keysPressed = { w: false, a: false, s: false, d: false, ' ': false };
+        
+        const ORB_COUNT = 5;
+        const orbs: THREE.Mesh[] = [];
+        const orbGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+        const orbMaterial = new THREE.MeshBasicMaterial({ color: '#ffff88', toneMapped: false });
+        let score = 0;
+
+        const scoreElement = document.getElementById('score');
+        const instructionsElement = document.getElementById('instructions');
+
+        const spawnOrbs = () => {
+            orbs.forEach(orb => scene.remove(orb));
+            orbs.length = 0;
+            const monolithBBox = new Box3().setFromObject(monolith);
+            const areaSize = 45;
+            const pondCenter = new THREE.Vector2(pondPosition.x, pondPosition.z);
+            const pondRadiusSq = (pondRadius + 1) * (pondRadius + 1);
+
+            for (let i = 0; i < ORB_COUNT; i++) {
+                const orb = new THREE.Mesh(orbGeometry, orbMaterial);
+                let validPosition = false;
+                while (!validPosition) {
+                    const x = (Math.random() - 0.5) * areaSize;
+                    const z = (Math.random() - 0.5) * areaSize;
+                    const orbPos = new THREE.Vector3(x, 1.5, z);
+                    const inPond = new THREE.Vector2(x, z).distanceToSquared(pondCenter) < pondRadiusSq;
+                    const inMonolith = monolithBBox.distanceToPoint(orbPos) < 2.0;
+                    if (!inPond && !inMonolith) {
+                        orb.position.copy(orbPos);
+                        validPosition = true;
+                    }
+                }
+                orbs.push(orb);
+                scene.add(orb);
+            }
+            score = 0;
+            if (scoreElement) scoreElement.innerText = `Orbs: 0 / ${ORB_COUNT}`;
+        };
+        spawnOrbs();
+
         // --- Post-processing ---
         const composer = new EffectComposer(renderer);
         const renderPass = new RenderPass(scene, camera);
@@ -630,7 +685,7 @@ const App: React.FC = () => {
 
         // --- Camera ---
         camera.position.set(-15, 4, 15);
-        controls.target.set(0, 1, 0);
+        controls.target.copy(player.position);
         controls.update();
         
         const sceneElements: SceneElements = { sky, directionalLight, hemisphereLight, ground, grassMesh, water, clouds, pineTrees, stars, moon, bloomPass, axesHelper };
@@ -734,15 +789,80 @@ const App: React.FC = () => {
         };
         
         updateWorldState(params.timeOfDay);
-
-        // --- GUI ---
         const gui = setupGUI(params, sceneElements, scene, updateWorldState);
 
-        // --- Animation Loop ---
+        const updatePlayer = (delta: number) => {
+            const moveForce = 30.0;
+            const jumpHeight = 8.0;
+            const gravity = -20.0;
+            const damping = 0.92;
+
+            playerState.velocity.y += gravity * delta;
+
+            const forward = new THREE.Vector3();
+            camera.getWorldDirection(forward);
+            forward.y = 0;
+            forward.normalize();
+            const right = new THREE.Vector3().crossVectors(camera.up, forward).negate();
+
+            const moveDirection = new THREE.Vector3();
+            if (keysPressed.w) moveDirection.add(forward);
+            if (keysPressed.s) moveDirection.sub(forward);
+            if (keysPressed.a) moveDirection.add(right);
+            if (keysPressed.d) moveDirection.sub(right);
+            if (moveDirection.lengthSq() > 0) {
+                moveDirection.normalize();
+                playerState.velocity.x += moveDirection.x * moveForce * delta;
+                playerState.velocity.z += moveDirection.z * moveForce * delta;
+            }
+
+            const effectiveDamping = Math.pow(damping, delta * 60);
+            playerState.velocity.x *= effectiveDamping;
+            playerState.velocity.z *= effectiveDamping;
+
+            const monolithBBox = new Box3().setFromObject(monolith);
+            player.position.y += playerState.velocity.y * delta;
+            
+            player.position.x += playerState.velocity.x * delta;
+            let playerBBox = new Box3().setFromObject(player);
+            if (playerBBox.intersectsBox(monolithBBox)) {
+                player.position.x -= playerState.velocity.x * delta;
+                playerState.velocity.x = 0;
+            }
+            
+            player.position.z += playerState.velocity.z * delta;
+            playerBBox = new Box3().setFromObject(player);
+            if (playerBBox.intersectsBox(monolithBBox)) {
+                player.position.z -= playerState.velocity.z * delta;
+                playerState.velocity.z = 0;
+            }
+            
+            if (keysPressed[' '] && playerState.onGround) {
+                playerState.velocity.y = jumpHeight;
+                playerState.onGround = false;
+            }
+
+            if (player.position.y < playerSize / 2) {
+                player.position.y = playerSize / 2;
+                playerState.velocity.y = 0;
+                playerState.onGround = true;
+            }
+            
+            const playerPos2D = new THREE.Vector2(player.position.x, player.position.z);
+            if (playerPos2D.distanceTo(new THREE.Vector2(pondPosition.x, pondPosition.z)) < pondRadius) {
+                player.position.set(0, playerSize / 2, 5);
+                playerState.velocity.set(0, 0, 0);
+            }
+        };
+
         const animate = () => {
             animationFrameId = requestAnimationFrame(animate);
             const elapsedTime = clock.getElapsedTime();
             const delta = clock.getDelta();
+
+            updatePlayer(delta);
+            controls.target.lerp(player.position, 0.1);
+
             const grassMaterial = grassMesh.material as THREE.MeshToonMaterial;
             const treeMaterial = pineTrees.material as THREE.MeshToonMaterial;
             const starMaterial = stars.material as THREE.PointsMaterial;
@@ -761,17 +881,11 @@ const App: React.FC = () => {
             if (water.material) {
                 (water.material as THREE.ShaderMaterial).uniforms.time.value += delta * params.waterFlowSpeed;
             }
-
-            if (clouds.userData.update) {
-                clouds.userData.update(delta, camera);
-            }
+            if (clouds.userData.update) clouds.userData.update(delta, camera);
             
             stars.rotation.y = elapsedTime * 0.01;
-            if ((moon.material as THREE.MeshBasicMaterial).opacity > 0) {
-                moon.lookAt(camera.position);
-            }
+            if ((moon.material as THREE.MeshBasicMaterial).opacity > 0) moon.lookAt(camera.position);
 
-            // --- Interactivity Raycasting ---
             raycaster.setFromCamera(mouse, camera);
             const intersects = raycaster.intersectObjects([ground, water]);
 
@@ -781,51 +895,73 @@ const App: React.FC = () => {
 
             const groundIntersect = intersects.find(i => i.object === ground);
             if (groundIntersect) {
-                if (grassMaterial.userData.shader) grassMaterial.userData.shader.uniforms.uMousePos.value.copy(groundIntersect.point);
-                if (treeMaterial.userData.shader) treeMaterial.userData.shader.uniforms.uMousePos.value.copy(groundIntersect.point);
+                const interactPoint = groundIntersect.point;
+                if (grassMaterial.userData.shader) grassMaterial.userData.shader.uniforms.uMousePos.value.copy(interactPoint);
+                if (treeMaterial.userData.shader) treeMaterial.userData.shader.uniforms.uMousePos.value.copy(interactPoint);
             }
-
             const waterIntersect = intersects.find(i => i.object === water);
-            if (waterIntersect && water.material) {
-                (water.material as THREE.ShaderMaterial).uniforms.uMousePos.value.copy(waterIntersect.point);
+            if (waterIntersect && water.material) (water.material as THREE.ShaderMaterial).uniforms.uMousePos.value.copy(waterIntersect.point);
+            
+            const baseOrbY = 1.5;
+            for (let i = orbs.length - 1; i >= 0; i--) {
+                const orb = orbs[i];
+                orb.position.y = baseOrbY + Math.sin(elapsedTime * 2 + i) * 0.2;
+                orb.rotation.y += delta;
+                if (player.position.distanceTo(orb.position) < playerSize / 2 + 0.3) {
+                    scene.remove(orb);
+                    orbs.splice(i, 1);
+                    score++;
+                    if (scoreElement) scoreElement.innerText = `Orbs: ${score} / ${ORB_COUNT}`;
+                    if (orbs.length === 0) setTimeout(spawnOrbs, 1000);
+                }
             }
-
 
             controls.update();
             composer.render();
         };
         animate();
 
-        // --- Event Listeners & Cleanup ---
         const handleResize = () => {
             if (!currentMount) return;
             const width = currentMount.clientWidth;
             const height = currentMount.clientHeight;
-            
             camera.aspect = width / height;
             camera.updateProjectionMatrix();
-            
             renderer.setSize(width, height);
             composer.setSize(width, height);
             bloomPass.setSize(width, height);
         };
-
         const handleMouseMove = (event: MouseEvent) => {
             mouse.x = (event.clientX / currentMount.clientWidth) * 2 - 1;
             mouse.y = -(event.clientY / currentMount.clientHeight) * 2 + 1;
         };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            const key = event.key.toLowerCase();
+            if (key in keysPressed) (keysPressed as any)[key] = true;
+        };
+        const handleKeyUp = (event: KeyboardEvent) => {
+            const key = event.key.toLowerCase();
+            if (key in keysPressed) (keysPressed as any)[key] = false;
+            if (instructionsElement && !instructionsElement.classList.contains('hidden')) {
+                if (['w', 'a', 's', 'd', ' '].includes(key)) {
+                    instructionsElement.classList.add('hidden');
+                }
+            }
+        };
 
         window.addEventListener('resize', handleResize);
         window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
 
         return () => {
             cancelAnimationFrame(animationFrameId);
             window.removeEventListener('resize', handleResize);
             window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
             
-            if (currentMount && renderer.domElement) {
-                 currentMount.removeChild(renderer.domElement);
-            }
+            if (currentMount && renderer.domElement) currentMount.removeChild(renderer.domElement);
             gui.destroy();
             controls.dispose();
             
@@ -836,7 +972,6 @@ const App: React.FC = () => {
             (stars.material as THREE.Material).dispose();
             moon.geometry.dispose();
             (moon.material as THREE.Material).dispose();
-
 
             scene.traverse(object => {
                 if (object instanceof THREE.Mesh) {

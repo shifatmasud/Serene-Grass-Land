@@ -25,6 +25,35 @@
         --focus-color: #77d777;
         --font-size: 14px;
       }
+      #game-ui {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        color: white;
+        text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.7);
+        font-weight: 500;
+      }
+      #score {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        font-size: 1.5em;
+      }
+      #instructions {
+        position: absolute;
+        bottom: 20px;
+        width: 100%;
+        text-align: center;
+        font-size: 1.1em;
+        opacity: 1;
+        transition: opacity 1s ease-in-out;
+      }
+      #instructions.hidden {
+        opacity: 0;
+      }
     </style>
     <script type="importmap">
 {
@@ -42,6 +71,10 @@
   </head>
   <body>
     <div id="root"></div>
+    <div id="game-ui">
+      <div id="score">Orbs: 0 / 5</div>
+      <div id="instructions">WASD to Move &nbsp;&nbsp;|&nbsp;&nbsp; Space to Jump &nbsp;&nbsp;|&nbsp;&nbsp; Mouse to Look</div>
+    </div>
     <script type="module" src="/index.tsx"></script>
   </body>
 </html>
