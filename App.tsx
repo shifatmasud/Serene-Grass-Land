@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { GUI } from 'lil-gui';
@@ -290,6 +291,13 @@ function createGrass(pondPosition: THREE.Vector3, pondRadius: number) {
     const grassGeometry = new THREE.PlaneGeometry(0.1, grassBladeHeight, 1, 2);
     grassGeometry.translate(0, grassBladeHeight / 2, 0);
 
+    const randoms = new Float32Array(maxGrassCount);
+    for (let i = 0; i < maxGrassCount; i++) {
+        randoms[i] = Math.random();
+    }
+    grassGeometry.setAttribute('aRandom', new THREE.InstancedBufferAttribute(randoms, 1));
+
+
     const positions = grassGeometry.attributes.position;
     positions.setX(0, 0);
     positions.setX(1, 0);
@@ -306,17 +314,25 @@ function createGrass(pondPosition: THREE.Vector3, pondRadius: number) {
         shader.uniforms.time = { value: 0 };
         shader.uniforms.uMousePos = { value: new THREE.Vector3(9999, 9999, 9999) };
         shader.uniforms.uGrassTipColor = { value: new THREE.Color(initialParams.grassTipColor) };
+        shader.uniforms.uSunDirection = { value: new THREE.Vector3(0, 1, 0) };
 
         shader.vertexShader = `
             uniform float time;
             uniform vec3 uMousePos;
             varying vec3 vWorldPosition;
             varying float vRelativeHeight;
+            attribute float aRandom;
+            varying float vRandom;
+            varying vec3 vGrassNormal;
         \n` + shader.vertexShader;
         
         shader.fragmentShader = `
             uniform vec3 uGrassTipColor;
+            uniform vec3 uSunDirection;
             varying float vRelativeHeight;
+            varying float vRandom;
+            varying vec3 vGrassNormal;
+            varying vec3 vWorldPosition;
         \n` + shader.fragmentShader;
 
         shader.vertexShader = shader.vertexShader.replace(
@@ -325,6 +341,8 @@ function createGrass(pondPosition: THREE.Vector3, pondRadius: number) {
                 #include <begin_vertex>
                 vWorldPosition = (instanceMatrix * vec4(position, 1.0)).xyz;
                 vRelativeHeight = position.y / ${grassBladeHeight.toFixed(1)};
+                vRandom = aRandom;
+                vGrassNormal = normalize((instanceMatrix * vec4(normal, 0.0)).xyz);
 
                 // Wind Effect
                 float windStrength = 0.15;
@@ -355,7 +373,28 @@ function createGrass(pondPosition: THREE.Vector3, pondRadius: number) {
             '#include <color_fragment>',
             `
                 #include <color_fragment>
-                diffuseColor.rgb = mix(diffuseColor.rgb, uGrassTipColor, vRelativeHeight);
+                
+                // 1. Color variation
+                float gradientNoise = (vRandom - 0.5) * 0.4;
+                float gradient = clamp(vRelativeHeight * (1.0 - gradientNoise) + gradientNoise, 0.0, 1.0);
+                vec3 mixedColor = mix(diffuseColor.rgb, uGrassTipColor, gradient);
+
+                // 2. Subsurface scattering
+                vec3 viewDir = normalize(cameraPosition - vWorldPosition);
+                vec3 lightDir = normalize(-uSunDirection);
+
+                // Translucency (light from behind passing through)
+                float translucency = max(0.0, dot(vGrassNormal, lightDir));
+                translucency = pow(translucency, 2.0) * 0.5;
+
+                // Scattering (light wrapping around edges)
+                float scatter = pow(max(0.0, dot(viewDir, -lightDir) + 0.1), 3.0) * 0.7;
+
+                // Combine and add to color
+                vec3 sssColor = (uGrassTipColor + diffuseColor.rgb) * 0.4; // Average base and tip color for glow
+                vec3 finalSSS = sssColor * (translucency + scatter);
+
+                diffuseColor.rgb = mixedColor + finalSSS;
             `
         );
         grassMaterial.userData.shader = shader;
@@ -859,6 +898,7 @@ const App: React.FC = () => {
 
             if (grassMaterial.userData.shader) {
                 grassMaterial.userData.shader.uniforms.time.value = elapsedTime;
+                grassMaterial.userData.shader.uniforms.uSunDirection.value.copy(sceneElements.directionalLight.position).normalize();
             }
             if (treeMaterial.userData.shader) {
                 treeMaterial.userData.shader.uniforms.time.value = elapsedTime;
