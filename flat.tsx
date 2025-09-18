@@ -817,6 +817,7 @@ class Game {
         d: false,
     }
     private baseEmissiveIntensity: number
+    private targetEmissiveIntensity: number
     private isActive = false
     private isCelebratingWin = false
 
@@ -940,16 +941,24 @@ class Game {
         )
         this.player.castShadow = true
         this.baseEmissiveIntensity = playerMaterial.emissiveIntensity
+        this.targetEmissiveIntensity = this.baseEmissiveIntensity
         this.scene.add(this.player)
     }
 
     public setPlayerHover(isHovered: boolean) {
         if (this.isActive) return
-        const material = this.player.material as THREE.MeshStandardMaterial
-        // Increase emissive intensity on hover for a glow effect
-        material.emissiveIntensity = isHovered
+        this.targetEmissiveIntensity = isHovered
             ? this.baseEmissiveIntensity * 3.0
             : this.baseEmissiveIntensity
+    }
+    
+    public updateHover(delta: number) {
+        const material = this.player.material as THREE.MeshStandardMaterial
+        material.emissiveIntensity = THREE.MathUtils.lerp(
+            material.emissiveIntensity,
+            this.targetEmissiveIntensity,
+            delta * 10
+        )
     }
 
     private animate = () => {
@@ -2562,6 +2571,9 @@ export function ModelViewer() {
 
             // --- Spectator-only logic ---
             controls.update()
+            
+            game.updateHover(delta);
+
             raycaster.setFromCamera(mouse, camera)
 
             // Player hover logic
@@ -2752,7 +2764,205 @@ export function ModelViewer() {
         }
     }, [])
 
-    return <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
+    return (
+        <>
+            <style>{`
+      .lil-gui {
+        --widget-color: #4f8f4f;
+        --hover-color: #63b363;
+        --focus-color: #77d777;
+        --font-size: 14px;
+      }
+      #ui-container {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        color: white;
+        text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.7);
+        font-weight: 500;
+      }
+      #score, #instructions {
+        opacity: 0;
+        transition: opacity 0.5s ease-in-out;
+      }
+      body.playing #score {
+        opacity: 1;
+      }
+      body.playing:not(.is-mobile) #instructions {
+          opacity: 1;
+      }
+      #score {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        font-size: 1.5em;
+      }
+      #instructions {
+        position: absolute;
+        bottom: 20px;
+        width: 100%;
+        text-align: center;
+        font-size: 1.1em;
+      }
+      #win-screen {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: none; /* Toggled by JS */
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        pointer-events: none;
+        z-index: 1000;
+        overflow: hidden;
+      }
+      #win-message {
+        font-size: 3em;
+        color: #fff;
+        text-shadow: 0 0 10px #ffc, 0 0 20px #ffc, 0 0 30px #ff0, 2px 2px 4px rgba(0,0,0,0.8);
+        font-family: 'Georgia', serif;
+        text-align: center;
+        animation: fadeInOut 5s forwards;
+        opacity: 0;
+        padding: 20px;
+      }
+      @keyframes fadeInOut {
+        0% { opacity: 0; transform: scale(0.8); }
+        20% { opacity: 1; transform: scale(1.05); }
+        80% { opacity: 1; transform: scale(1); }
+        100% { opacity: 0; transform: scale(0.9); }
+      }
+
+      #confetti-container {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          overflow: hidden;
+          pointer-events: none;
+      }
+      .confetti {
+          position: absolute;
+          width: 10px;
+          height: 20px;
+          opacity: 0;
+          animation: fall 5s ease-out forwards;
+      }
+      @keyframes fall {
+          0% { transform: translateY(-10vh) rotateZ(0deg) rotateY(0deg); opacity: 1; }
+          100% { transform: translateY(110vh) rotateZ(720deg) rotateY(360deg); opacity: 0; }
+      }
+      
+      /* --- Mobile Controls --- */
+      #mobile-controls {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: auto;
+        pointer-events: none;
+        display: none;
+        justify-content: space-between;
+        align-items: flex-end;
+        padding: 20px;
+        box-sizing: border-box;
+        z-index: 100;
+      }
+      body.is-mobile.playing #mobile-controls {
+        display: flex;
+      }
+
+      #joystick, #jump-control {
+        pointer-events: auto;
+      }
+      
+      #joystick {
+        position: relative;
+        width: 135px;
+        height: 135px;
+      }
+
+      .joy-btn, .jump-btn {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        color: white;
+        font-size: 2em;
+        background: rgba(255, 255, 255, 0.15);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        transition: background-color 0.1s ease-out;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      }
+      .joy-btn:active, .jump-btn:active {
+         background: rgba(255, 255, 255, 0.3);
+      }
+      
+      .joy-btn {
+        position: absolute;
+        width: 45px;
+        height: 45px;
+        border-radius: 10px;
+      }
+      
+      #joy-w { top: 0; left: 45px; }
+      #joy-a { top: 45px; left: 0; }
+      #joy-s { top: 45px; left: 90px; }
+      #joy-d { top: 90px; left: 45px; }
+
+      #jump-control {
+          padding-right: 20px;
+          padding-bottom: 10px;
+      }
+
+      .jump-btn {
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+      }
+    `}</style>
+            <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
+            <div id="ui-container">
+                <div id="score">Score: 0</div>
+                <div id="instructions">
+                    WASD to Move &nbsp;&nbsp;|&nbsp;&nbsp; Space to Jump
+                    &nbsp;&nbsp;|&nbsp;&nbsp; Mouse to Look
+                </div>
+            </div>
+            <div id="win-screen">
+                <div id="win-message"></div>
+                <div id="confetti-container"></div>
+            </div>
+            <div id="mobile-controls">
+                <div id="joystick">
+                    <div className="joy-btn" id="joy-w">
+                        ▲
+                    </div>
+                    <div className="joy-btn" id="joy-a">
+                        ◄
+                    </div>
+                    <div className="joy-btn" id="joy-d">
+                        ►
+                    </div>
+                    <div className="joy-btn" id="joy-s">
+                        ▼
+                    </div>
+                </div>
+                <div id="jump-control">
+                    <div className="jump-btn" id="jump-btn">
+                        ↑
+                    </div>
+                </div>
+            </div>
+        </>
+    )
 }
 
-export default ModelViewer;
+export default ModelViewer
