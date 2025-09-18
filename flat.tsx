@@ -2943,16 +2943,16 @@ export function ModelViewer() {
             <div id="mobile-controls">
                 <div id="joystick">
                     <div className="joy-btn" id="joy-w">
-                        ▲
+                        🢁
                     </div>
                     <div className="joy-btn" id="joy-a">
-                        ◄
+                        🢀
                     </div>
                     <div className="joy-btn" id="joy-d">
-                        ►
+                        🢂
                     </div>
                     <div className="joy-btn" id="joy-s">
-                        ▼
+                        🢃
                     </div>
                 </div>
                 <div id="jump-control">
@@ -2965,4 +2965,3 @@ export function ModelViewer() {
     )
 }
 
-export default ModelViewer
