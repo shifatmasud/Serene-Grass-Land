@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { Game } from './Game';
@@ -62,8 +63,8 @@ const TestApp: React.FC = () => {
         const pond = { position: new THREE.Vector3(100, 0, 100), radius: 5 }; // Place it far away
 
         // --- Game Setup ---
-        // FIX: Pass renderer and composer to Game constructor to satisfy its 6-argument signature.
-        const game = new Game(scene, camera, monolith, pond, renderer, composer);
+        // FIX: Pass isMobile flag (7th argument) to Game constructor.
+        const game = new Game(scene, camera, monolith, pond, renderer, composer, false);
         
         // Render loop for when the game is not active (spectator mode)
         const animate = () => {

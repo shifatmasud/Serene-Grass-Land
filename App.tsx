@@ -52,9 +52,9 @@ const initialParams = {
     treeCount: 5,
 
     // Post-processing
-    bloomStrength: 0.02,
+    bloomStrength: 0.4,
     bloomThreshold: 1,
-    bloomRadius: 0,
+    bloomRadius: 0.2,
 
     // Water Ripples
     waterFlowSpeed: 0.5,
@@ -516,6 +516,11 @@ const App: React.FC = () => {
 
         const currentMount = mountRef.current;
         let animationFrameId: number;
+        
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        if (isMobile) {
+            document.body.classList.add('is-mobile');
+        }
 
         const gameState = { current: 'spectator' }; // spectator | playing
         const hoveredObject = { current: null as THREE.Object3D | null };
@@ -531,7 +536,7 @@ const App: React.FC = () => {
         scene.background = new THREE.Color(params.fogColor);
 
         renderer.setSize(currentMount.clientWidth, currentMount.clientHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Performance optimization for high DPI displays
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -630,7 +635,7 @@ const App: React.FC = () => {
         composer.addPass(bloomPass);
 
         // --- Game Mechanics Setup ---
-        const game = new Game(scene, camera, monolith, { position: pondPosition, radius: pondRadius }, renderer, composer);
+        const game = new Game(scene, camera, monolith, { position: pondPosition, radius: pondRadius }, renderer, composer, isMobile);
 
 
         // --- Camera ---
@@ -822,7 +827,23 @@ const App: React.FC = () => {
         
         const handleClick = () => {
             if (gameState.current === 'spectator' && hoveredObject.current === game.player) {
-                document.body.requestPointerLock();
+                 if (isMobile) {
+                    // Bypass pointer lock for mobile, start game directly
+                    controls.dispose();
+                    gameState.current = 'playing';
+
+                    cancelAnimationFrame(animationFrameId);
+                    game.startGame();
+
+                    document.body.classList.add('playing');
+                    if (hoveredObject.current) {
+                        game.setPlayerHover(false);
+                        hoveredObject.current = null;
+                        currentMount.style.cursor = 'default';
+                    }
+                } else {
+                    document.body.requestPointerLock();
+                }
             }
         };
 
@@ -841,6 +862,8 @@ const App: React.FC = () => {
                     currentMount.style.cursor = 'default';
                 }
             } else {
+                 if (isMobile) return; // Don't react to pointer lock changes on mobile
+                
                 gameState.current = 'spectator';
                 game.stopGame();
 
