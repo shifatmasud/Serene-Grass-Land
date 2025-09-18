@@ -951,7 +951,7 @@ class Game {
             ? this.baseEmissiveIntensity * 3.0
             : this.baseEmissiveIntensity
     }
-    
+
     public updateHover(delta: number) {
         const material = this.player.material as THREE.MeshStandardMaterial
         material.emissiveIntensity = THREE.MathUtils.lerp(
@@ -2571,8 +2571,8 @@ export function ModelViewer() {
 
             // --- Spectator-only logic ---
             controls.update()
-            
-            game.updateHover(delta);
+
+            game.updateHover(delta)
 
             raycaster.setFromCamera(mouse, camera)
 
@@ -2914,8 +2914,8 @@ export function ModelViewer() {
       
       #joy-w { top: 0; left: 45px; }
       #joy-a { top: 45px; left: 0; }
-      #joy-s { top: 45px; left: 90px; }
-      #joy-d { top: 90px; left: 45px; }
+      #joy-s { top: 90px; left: 45px; }
+      #joy-d { top: 45px; left: 90px; }
 
       #jump-control {
           padding-right: 20px;
@@ -2942,18 +2942,10 @@ export function ModelViewer() {
             </div>
             <div id="mobile-controls">
                 <div id="joystick">
-                    <div className="joy-btn" id="joy-w">
-                        ▲
-                    </div>
-                    <div className="joy-btn" id="joy-a">
-                        ◄
-                    </div>
-                    <div className="joy-btn" id="joy-s">
-                        ►
-                    </div>
-                    <div className="joy-btn" id="joy-d">
-                        ▼
-                    </div>
+                    <div className="joy-btn" id="joy-w"></div>
+                    <div className="joy-btn" id="joy-a"></div>
+                    <div className="joy-btn" id="joy-d"></div>
+                    <div className="joy-btn" id="joy-s"></div>
                 </div>
                 <div id="jump-control">
                     <div className="jump-btn" id="jump-btn">
@@ -2964,5 +2956,3 @@ export function ModelViewer() {
         </>
     )
 }
-
-export default ModelViewer
