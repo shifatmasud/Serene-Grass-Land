@@ -815,6 +815,10 @@ class Game {
         a: false,
         s: false,
         d: false,
+        arrowup: false,
+        arrowleft: false,
+        arrowdown: false,
+        arrowright: false,
     }
     private baseEmissiveIntensity: number
     private targetEmissiveIntensity: number
@@ -1192,10 +1196,14 @@ class Game {
             .normalize()
 
         const moveDirection = new THREE.Vector3()
-        if (this.keysPressed.w) moveDirection.add(forward)
-        if (this.keysPressed.s) moveDirection.sub(forward) // Note: Swapped right and forward for joystick layout
-        if (this.keysPressed.a) moveDirection.add(right)
-        if (this.keysPressed.d) moveDirection.sub(right) // Note: Swapped a/d from desktop
+        if (this.keysPressed.w || this.keysPressed.arrowup)
+            moveDirection.add(forward)
+        if (this.keysPressed.s || this.keysPressed.arrowdown)
+            moveDirection.sub(forward)
+        if (this.keysPressed.a || this.keysPressed.arrowleft)
+            moveDirection.add(right)
+        if (this.keysPressed.d || this.keysPressed.arrowright)
+            moveDirection.sub(right)
 
         const targetVelocity = new THREE.Vector3()
         if (moveDirection.lengthSq() > 0) {
@@ -1323,12 +1331,18 @@ class Game {
     // --- Event Handlers ---
     private handleKeyDown = (event: KeyboardEvent) => {
         const key = event.key.toLowerCase()
-        if (key in this.keysPressed) this.keysPressed[key] = true
+        if (key in this.keysPressed) {
+            event.preventDefault() // prevent page scroll
+            this.keysPressed[key] = true
+        }
         if (event.code === "Space") this.jump()
     }
     private handleKeyUp = (event: KeyboardEvent) => {
         const key = event.key.toLowerCase()
-        if (key in this.keysPressed) this.keysPressed[key] = false
+        if (key in this.keysPressed) {
+            event.preventDefault()
+            this.keysPressed[key] = false
+        }
     }
     private handleDesktopMouseMove = (event: MouseEvent) => {
         if (!this.isActive || !document.pointerLockElement) return
@@ -2570,6 +2584,26 @@ export function ModelViewer() {
                 moon.lookAt(camera.position)
 
             // --- Spectator-only logic ---
+
+            // Spectator camera dolly animation
+            const dollySpeed = 0.1
+            const minDistance = 12
+            const maxDistance = 22
+            const dollyRange = maxDistance - minDistance
+            const idealDistance =
+                minDistance +
+                (dollyRange / 2) * (1 + Math.sin(elapsedTime * dollySpeed))
+            
+            const direction = new THREE.Vector3()
+                .subVectors(camera.position, controls.target)
+                .normalize()
+            const newPosition = controls.target
+                .clone()
+                .add(direction.multiplyScalar(idealDistance))
+
+            // A gentle lerp to avoid fighting user input too hard.
+            camera.position.lerp(newPosition, delta * 0.5)
+
             controls.update()
 
             game.updateHover(delta)
@@ -2648,6 +2682,17 @@ export function ModelViewer() {
             mouse.y = -(event.clientY / currentMount.clientHeight) * 2 + 1
         }
 
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (
+                !isMobile &&
+                gameState.current === "spectator" &&
+                event.code === "Space"
+            ) {
+                event.preventDefault()
+                document.body.requestPointerLock()
+            }
+        }
+
         const handleClick = () => {
             if (
                 gameState.current === "spectator" &&
@@ -2713,6 +2758,7 @@ export function ModelViewer() {
 
         window.addEventListener("resize", handleResize)
         window.addEventListener("mousemove", handleMouseMove)
+        document.addEventListener("keydown", handleKeyDown)
         document.addEventListener("click", handleClick)
         document.addEventListener(
             "pointerlockchange",
@@ -2724,6 +2770,7 @@ export function ModelViewer() {
             cancelAnimationFrame(animationFrameId)
             window.removeEventListener("resize", handleResize)
             window.removeEventListener("mousemove", handleMouseMove)
+            document.removeEventListener("keydown", handleKeyDown)
             document.removeEventListener("click", handleClick)
             document.removeEventListener(
                 "pointerlockchange",
@@ -2784,28 +2831,36 @@ export function ModelViewer() {
         text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.7);
         font-weight: 500;
       }
-      #score, #instructions {
+      #score {
         opacity: 0;
         transition: opacity 0.5s ease-in-out;
       }
       body.playing #score {
         opacity: 1;
       }
-      body.playing:not(.is-mobile) #instructions {
+      #instructions-spectator, #instructions-game {
+        position: absolute;
+        bottom: 20px;
+        width: 100%;
+        text-align: center;
+        font-size: 1.1em;
+        opacity: 0;
+        transition: opacity 0.5s ease-in-out;
+      }
+      body:not(.playing) #instructions-spectator {
           opacity: 1;
+      }
+      body.playing #instructions-game {
+          opacity: 1;
+      }
+      .is-mobile .desktop-only {
+          display: none;
       }
       #score {
         position: absolute;
         top: 20px;
         left: 20px;
         font-size: 1.5em;
-      }
-      #instructions {
-        position: absolute;
-        bottom: 20px;
-        width: 100%;
-        text-align: center;
-        font-size: 1.1em;
       }
       #win-screen {
         position: absolute;
@@ -2900,6 +2955,9 @@ export function ModelViewer() {
         -webkit-backdrop-filter: blur(8px);
         transition: background-color 0.1s ease-out;
         box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        -webkit-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
       }
       .joy-btn:active, .jump-btn:active {
          background: rgba(255, 255, 255, 0.3);
@@ -2931,9 +2989,11 @@ export function ModelViewer() {
             <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
             <div id="ui-container">
                 <div id="score">Score: 0</div>
-                <div id="instructions">
-                    WASD to Move &nbsp;&nbsp;|&nbsp;&nbsp; Space to Jump
-                    &nbsp;&nbsp;|&nbsp;&nbsp; Mouse to Look
+                <div id="instructions-spectator">
+                    Click the Blue Cube <span className="desktop-only">or press SPACE</span> to play
+                </div>
+                <div id="instructions-game">
+                   <span className="desktop-only">WASD/Arrows to Move &nbsp;&nbsp;|&nbsp;&nbsp; Space to Jump &nbsp;&nbsp;|&nbsp;&nbsp; Mouse to Look &nbsp;&nbsp;|&nbsp;&nbsp; ESC to Exit</span>
                 </div>
             </div>
             <div id="win-screen">
