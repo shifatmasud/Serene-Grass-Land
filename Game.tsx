@@ -38,6 +38,14 @@ export class Game {
     private winMessageElement: HTMLElement | null;
     private confettiContainerElement: HTMLElement | null;
     
+    // --- Particle System ---
+    private particlePool: THREE.Mesh[] = [];
+    private activeParticles: { mesh: THREE.Mesh; velocity: THREE.Vector3; lifetime: number; initialLifetime: number }[] = [];
+    private particleGeometry: THREE.BoxGeometry;
+    private particleMaterial: THREE.MeshBasicMaterial;
+    private readonly MAX_PARTICLES = 150; // Max concurrent particles
+    private readonly PARTICLES_PER_BURST = 15;
+
     // --- Camera Control State ---
     private cameraOffset = new THREE.Vector3(0, 2.5, 6.0); // height, distance
     private cameraTargetOffset = new THREE.Vector3(0, 1.2, 0);
@@ -87,6 +95,16 @@ export class Game {
             emissiveIntensity: 3,
             toneMapped: false,
         });
+
+        // --- Initialize Particle System ---
+        this.particleGeometry = new THREE.BoxGeometry(0.05, 0.05, 0.05);
+        this.particleMaterial = new THREE.MeshBasicMaterial({ transparent: true });
+        for (let i = 0; i < this.MAX_PARTICLES; i++) {
+            const particle = new THREE.Mesh(this.particleGeometry, this.particleMaterial.clone());
+            particle.visible = false;
+            this.scene.add(particle);
+            this.particlePool.push(particle);
+        }
 
         this.setupPlayer();
         this.spawnOrbs();
@@ -199,6 +217,33 @@ export class Game {
         if (this.scoreElement) this.scoreElement.innerText = `Score: 0`;
     };
 
+    private triggerOrbBurst(position: THREE.Vector3, color: THREE.Color) {
+        for (let i = 0; i < this.PARTICLES_PER_BURST; i++) {
+            const particleMesh = this.particlePool.pop();
+            if (!particleMesh) continue;
+
+            particleMesh.position.copy(position);
+            (particleMesh.material as THREE.MeshBasicMaterial).color.copy(color);
+            (particleMesh.material as THREE.MeshBasicMaterial).opacity = 1.0;
+            particleMesh.visible = true;
+            
+            const velocity = new THREE.Vector3(
+                (Math.random() - 0.5),
+                (Math.random() - 0.5) + 0.5, // Bias upwards
+                (Math.random() - 0.5)
+            ).normalize().multiplyScalar(Math.random() * 2.5 + 1.5);
+
+            const lifetime = Math.random() * 0.6 + 0.4; // Lifetime between 0.4 and 1.0 seconds
+
+            this.activeParticles.push({
+                mesh: particleMesh,
+                velocity: velocity,
+                lifetime: lifetime,
+                initialLifetime: lifetime,
+            });
+        }
+    }
+
     private triggerConfetti() {
         if (!this.confettiContainerElement) return;
         const colors = ['#f44336', '#e91e63', '#9c27b0', '#673ab7', '#3f51b5', '#2196f3', '#03a9f4', '#00bcd4', '#009688', '#4caf50', '#8bc34a', '#cddc39', '#ffeb3b', '#ffc107', '#ff9800'];
@@ -226,6 +271,29 @@ export class Game {
             this.spawnOrbs();
             this.isCelebratingWin = false;
         }, 5000);
+    }
+    
+    private updateParticles(delta: number) {
+        const gravity = 9.8;
+        for (let i = this.activeParticles.length - 1; i >= 0; i--) {
+            const p = this.activeParticles[i];
+
+            p.lifetime -= delta;
+
+            if (p.lifetime <= 0) {
+                p.mesh.visible = false;
+                this.particlePool.push(p.mesh);
+                this.activeParticles.splice(i, 1);
+                continue;
+            }
+
+            // Apply gravity
+            p.velocity.y -= gravity * delta;
+            p.mesh.position.add(p.velocity.clone().multiplyScalar(delta));
+
+            // Fade out
+            (p.mesh.material as THREE.MeshBasicMaterial).opacity = p.lifetime / p.initialLifetime;
+        }
     }
 
     private jump = () => {
@@ -320,6 +388,7 @@ export class Game {
             const orb = this.orbs[i];
             this.updateOrbAnimation(orb, delta, elapsedTime);
             if (this.player.position.distanceTo(orb.position) < PLAYER_SIZE / 2 + 0.3) {
+                this.triggerOrbBurst(orb.position, (orb.material as THREE.MeshStandardMaterial).color);
                 this.scene.remove(orb);
                 this.orbs.splice(i, 1);
                 this.score++;
@@ -328,6 +397,7 @@ export class Game {
         if(this.specialOrb) {
             this.updateOrbAnimation(this.specialOrb, delta, elapsedTime);
              if (this.player.position.distanceTo(this.specialOrb.position) < PLAYER_SIZE / 2 + 0.3) {
+                this.triggerOrbBurst(this.specialOrb.position, (this.specialOrb.material as THREE.MeshStandardMaterial).color);
                 this.scene.remove(this.specialOrb);
                 this.specialOrb = null;
                 this.score += 5;
@@ -342,6 +412,7 @@ export class Game {
         this.updatePlayer(delta);
         this.updateCamera(delta);
         this.updateOrbs(delta, elapsedTime);
+        this.updateParticles(delta);
     }
     
     // --- Event Handlers ---
@@ -432,6 +503,17 @@ export class Game {
         this.disposeEventListeners();
         this.orbs.forEach(orb => this.scene.remove(orb));
         if (this.specialOrb) this.scene.remove(this.specialOrb);
+
+        // Particle cleanup
+        [...this.activeParticles.map(p => p.mesh), ...this.particlePool].forEach(mesh => {
+            this.scene.remove(mesh);
+            (mesh.material as THREE.Material).dispose();
+        });
+        this.activeParticles = [];
+        this.particlePool = [];
+        this.particleGeometry.dispose();
+        this.particleMaterial.dispose();
+
         this.scene.remove(this.player);
         this.player.geometry.dispose();
         (this.player.material as THREE.Material).dispose();
